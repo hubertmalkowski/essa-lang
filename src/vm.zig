@@ -55,6 +55,8 @@ const VM = struct {
             try self.interpret(instruction);
             instruction = try self.fetch();
         }
+
+        // std.debug.print("{f} \n", .{instruction});
     }
 
     fn interpret(self: *VM, instruction: Instruction) VMError!void {
