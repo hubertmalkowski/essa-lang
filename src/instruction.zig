@@ -15,6 +15,9 @@ pub const InstructionTag = enum {
     EQ, // equals
     LT, // less then
     GT, // greater than
+    //
+    JMP,
+    JMP_IF,
 
     RETURN,
     HALT,
@@ -24,6 +27,8 @@ pub const ArithmeticInstruction = struct { destination: Register, a: Register, b
 pub const ComparisonInstruction = struct { destination: Register, a: Register, b: Register };
 pub const LoadInstruction = struct { register: Register, const_idx: u64 };
 pub const MoveInstruction = struct { destination: Register, source: Register };
+
+pub const JumpIfInstruction = struct { offset: i64, condition: Register };
 
 pub const Instruction = union(InstructionTag) {
     LOADK: LoadInstruction,
@@ -35,9 +40,12 @@ pub const Instruction = union(InstructionTag) {
     EQ: ComparisonInstruction,
     LT: ComparisonInstruction,
     GT: ComparisonInstruction,
+
+    JMP: i64,
+    JMP_IF: JumpIfInstruction,
     RETURN: Register,
     HALT: void, // HALT has no data
-    //
+
     pub fn format(self: Instruction, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         switch (self) {
             .LOADK => |i| try writer.print("LOADK {d} {d}", .{ i.register, i.const_idx }),
@@ -51,6 +59,9 @@ pub const Instruction = union(InstructionTag) {
             .EQ => |i| try writer.print("EQ {d} {d} {d}", .{ i.destination, i.a, i.b }),
             .LT => |i| try writer.print("LT {d} {d} {d}", .{ i.destination, i.a, i.b }),
             .GT => |i| try writer.print("GT {d} {d} {d}", .{ i.destination, i.a, i.b }),
+
+            .JMP => |i| try writer.print("JMP {d}", .{i}),
+            .JMP_IF => |i| try writer.print("JMP_IF {d} {d}", .{ i.offset, i.condition }),
 
             .RETURN => |i| try writer.print("RETURN {d}", .{i}),
             .HALT => try writer.print("HALT", .{}),
