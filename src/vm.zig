@@ -2,6 +2,7 @@ const std = @import("std");
 const Value = @import("value.zig").Value;
 const ValueTag = @import("value.zig").ValueTag;
 const ComparisonInstruction = @import("instruction.zig").ComparisonInstruction;
+const CallInstruction = @import("instruction.zig").CallInstruction;
 const JumpIfInstruction = @import("instruction.zig").JumpIfInstruction;
 const Instruction = @import("instruction.zig").Instruction;
 const MoveInstruction = @import("instruction.zig").MoveInstruction;
@@ -9,11 +10,11 @@ const ArithmeticInstruction = @import("instruction.zig").ArithmeticInstruction;
 const LoadInstruction = @import("instruction.zig").LoadInstruction;
 const Register = @import("instruction.zig").Register;
 
-const VMError = error{ TypeError, HaltExpected, DivisionError, OutOfBounds, UnknownError };
+const VMError = error{ TypeError, HaltExpected, DivisionError, OutOfMemory, OutOfBounds };
 
 const CallFrame = struct {
     registers: [256]Value,
-    result_register: u8,
+    result_register: Register,
     return_address: usize,
 
     fn init(result_register: u8, return_address: usize) CallFrame {
@@ -31,7 +32,6 @@ const CallFrame = struct {
 
 const VM = struct {
     ip: usize,
-    current_frame: usize,
     bytecode: []const Instruction,
     constants: []const Value,
     frames: std.ArrayList(CallFrame),
@@ -40,7 +40,7 @@ const VM = struct {
     pub fn init(allocator: std.mem.Allocator, bytecode: []const Instruction, constants: []const Value) !VM {
         var frames = std.ArrayList(CallFrame).empty;
         try frames.append(allocator, CallFrame.init(0, 0));
-        return VM{ .frames = frames, .ip = 0, .current_frame = 0, .bytecode = bytecode, .constants = constants, .allocator = allocator };
+        return VM{ .frames = frames, .ip = 0, .bytecode = bytecode, .constants = constants, .allocator = allocator };
     }
 
     pub fn deinit(self: *VM) void {
@@ -50,9 +50,17 @@ const VM = struct {
     pub fn run(self: *VM) VMError!void {
         var instruction = try self.fetch();
 
-        while (instruction != .HALT and instruction != .RETURN) {
+        while (instruction != .HALT) {
             // std.debug.print("{f} \n", .{instruction});
-            try self.interpret(instruction);
+            if (instruction == .RETURN) {
+                // When main function returns we need to stop the program. Returning value from the main function will be handled in the future
+                if (try self.ret(instruction.RETURN)) {
+                    break;
+                }
+            } else {
+                try self.interpret(instruction);
+            }
+
             instruction = try self.fetch();
         }
 
@@ -72,15 +80,34 @@ const VM = struct {
             .EQ => |value| self.eq(value),
             .LT => |value| self.lt(value),
 
+            .CALL => |value| self.call(value),
+
             .JMP => |value| self.jump(value),
             .JMP_IF => |value| self.jump_if(value),
 
-            else => {},
+            else => {
+                std.debug.print("NOT HANDLED INSTRUCTION {f} \n", .{instruction});
+            },
         };
     }
 
     fn get_current_frame(self: *VM) *CallFrame {
-        return &self.frames.items[self.current_frame];
+        return &self.frames.items[self.frames.items.len - 1];
+    }
+
+    fn get_parent_frame(self: *VM) *CallFrame {
+        return &self.frames.items[self.frames.items.len - 2];
+    }
+
+    fn insert_frame(self: *VM, result_register: Register, return_address: usize) VMError!void {
+        const frame = CallFrame.init(result_register, return_address);
+        self.frames.append(self.allocator, frame) catch return VMError.OutOfMemory;
+    }
+
+    // returns if should stop when there are no frames left
+    fn pop_frame(self: *VM) bool {
+        _ = self.frames.pop() orelse return true;
+        return false;
     }
 
     fn get_register(self: *VM, register: Register) Value {
@@ -113,6 +140,8 @@ const VM = struct {
     fn add(self: *VM, instruction: ArithmeticInstruction) VMError!void {
         const a = self.get_register(instruction.a);
         const b = self.get_register(instruction.b);
+
+        // std.debug.print("{f} + {f} \n", .{ a, b });
 
         if (!a.isDigit() or !b.isDigit()) {
             return VMError.TypeError;
@@ -206,6 +235,28 @@ const VM = struct {
             return VMError.TypeError;
         }
         if (condition.bool) return self.jump(instruction.offset);
+    }
+
+    fn call(self: *VM, instruction: CallInstruction) VMError!void {
+        try self.insert_frame(0, self.ip);
+        var current_frame = self.get_current_frame();
+        var parent_frame = self.get_parent_frame();
+        const num_of_args = instruction.num_of_args;
+        for (0..num_of_args) |i| {
+            current_frame.set(@intCast(i), parent_frame.get(@intCast(i)));
+        }
+        self.ip = instruction.function_addr;
+    }
+
+    fn ret(self: *VM, register: Register) VMError!bool {
+        const old_frame = self.get_current_frame();
+
+        self.ip = old_frame.return_address;
+        const return_value = old_frame.get(register);
+        const shouldStop = self.pop_frame();
+        if (shouldStop) return true;
+        self.set_register(0, return_value);
+        return false;
     }
 };
 
@@ -455,4 +506,48 @@ test "JMP_IF returns TypeError when condition is not boolean" {
     var vm = try VM.init(std.testing.allocator, &bytecode, &constants);
     defer vm.deinit();
     try std.testing.expectError(VMError.TypeError, vm.run());
+}
+
+test "call scenario: ADD function" {
+    const constants = [_]Value{Value{ .int = 5 }};
+
+    const bytecode = [_]Instruction{
+        Instruction{ .LOADK = LoadInstruction{ .register = 0, .const_idx = 0 } }, // r0 = 5
+        Instruction{ .LOADK = LoadInstruction{ .register = 1, .const_idx = 0 } }, // r1 = 5
+        Instruction{ .CALL = CallInstruction{ .function_addr = 4, .num_of_args = 2 } }, // add(5, 5)
+        Instruction{ .HALT = {} },
+        Instruction{ .ADD = ArithmeticInstruction{ .a = 0, .b = 1, .destination = 2 } }, // arg0 + arg1
+        Instruction{ .RETURN = 2 },
+    };
+
+    var vm = try VM.init(std.testing.allocator, &bytecode, &constants);
+    defer vm.deinit();
+    try vm.run();
+    try std.testing.expectEqual(10, vm.get_register(0).int);
+}
+
+test "call scenario: factorial" {
+    const constants = [_]Value{ Value{ .int = 5 }, Value{ .int = 1 } };
+
+    const bytecode = [_]Instruction{
+        Instruction{ .LOADK = LoadInstruction{ .register = 0, .const_idx = 0 } }, // r0 = 5
+        Instruction{ .CALL = CallInstruction{ .function_addr = 3, .num_of_args = 1 } }, // call factorial
+        Instruction{ .HALT = {} },
+        Instruction{ .LOADK = LoadInstruction{ .register = 1, .const_idx = 1 } }, // r1 = 1
+        Instruction{ .GT = ComparisonInstruction{ .a = 0, .b = 1, .destination = 2 } }, // r2 = (n > 1)
+        Instruction{ .JMP_IF = JumpIfInstruction{ .condition = 2, .offset = 1 } }, // if (n > 1) skip next instruction
+        Instruction{ .RETURN = 1 }, // We already have 1 in register 1
+        Instruction{ .SUB = ArithmeticInstruction{ .destination = 1, .a = 0, .b = 1 } }, // r1 = r0 - 1
+        Instruction{ .MOVE = MoveInstruction{ .destination = 3, .source = 0 } }, // move r0 to r3,
+        Instruction{ .MOVE = MoveInstruction{ .destination = 0, .source = 1 } }, // set (n - 1) as an argument
+        Instruction{ .CALL = CallInstruction{ .function_addr = 3, .num_of_args = 1 } },
+        Instruction{ .MUL = ArithmeticInstruction{ .destination = 0, .a = 0, .b = 3 } }, // r0 = factorial(n - 1) * n
+        Instruction{ .RETURN = 0 },
+    };
+
+    var vm = try VM.init(std.testing.allocator, &bytecode, &constants);
+    defer vm.deinit();
+    try vm.run();
+
+    try std.testing.expectEqual(120, vm.get_register(0).int);
 }

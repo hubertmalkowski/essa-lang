@@ -19,6 +19,8 @@ pub const InstructionTag = enum {
     JMP,
     JMP_IF,
 
+    CALL,
+
     RETURN,
     HALT,
 };
@@ -27,6 +29,7 @@ pub const ArithmeticInstruction = struct { destination: Register, a: Register, b
 pub const ComparisonInstruction = struct { destination: Register, a: Register, b: Register };
 pub const LoadInstruction = struct { register: Register, const_idx: u64 };
 pub const MoveInstruction = struct { destination: Register, source: Register };
+pub const CallInstruction = struct { function_addr: usize, num_of_args: u8 };
 
 pub const JumpIfInstruction = struct { offset: i64, condition: Register };
 
@@ -43,6 +46,9 @@ pub const Instruction = union(InstructionTag) {
 
     JMP: i64,
     JMP_IF: JumpIfInstruction,
+
+    CALL: CallInstruction,
+
     RETURN: Register,
     HALT: void, // HALT has no data
 
@@ -60,8 +66,10 @@ pub const Instruction = union(InstructionTag) {
             .LT => |i| try writer.print("LT {d} {d} {d}", .{ i.destination, i.a, i.b }),
             .GT => |i| try writer.print("GT {d} {d} {d}", .{ i.destination, i.a, i.b }),
 
+            .CALL => |i| try writer.print("CALL {d} {d}", .{ i.function_addr, i.num_of_args }),
+
             .JMP => |i| try writer.print("JMP {d}", .{i}),
-            .JMP_IF => |i| try writer.print("JMP_IF {d} {d}", .{ i.offset, i.condition }),
+            .JMP_IF => |i| try writer.print("JMP_IF {d} {d}", .{ i.condition, i.offset }),
 
             .RETURN => |i| try writer.print("RETURN {d}", .{i}),
             .HALT => try writer.print("HALT", .{}),
