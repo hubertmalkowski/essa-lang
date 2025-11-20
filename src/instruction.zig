@@ -21,15 +21,17 @@ pub const InstructionTag = enum {
 
     CALL,
 
+    DEBUG,
+
     RETURN,
     HALT,
 };
 
-pub const ArithmeticInstruction = struct { destination: Register, a: Register, b: Register };
-pub const ComparisonInstruction = struct { destination: Register, a: Register, b: Register };
-pub const LoadInstruction = struct { register: Register, const_idx: u64 };
-pub const MoveInstruction = struct { destination: Register, source: Register };
-pub const CallInstruction = struct { function_addr: usize, num_of_args: u8 };
+pub const ArithmeticInstruction = struct { destination: Register, a: Register, b: Register }; // 4 byutes
+pub const ComparisonInstruction = struct { destination: Register, a: Register, b: Register }; // 4 bytes
+pub const LoadInstruction = struct { register: Register, const_idx: u64 }; // 12 bytes
+pub const MoveInstruction = struct { destination: Register, source: Register }; // 4 bytes
+pub const CallInstruction = struct { function_addr: usize, num_of_args: u8 }; // 12 bytes
 
 pub const JumpIfInstruction = struct { offset: i64, condition: Register };
 
@@ -49,6 +51,8 @@ pub const Instruction = union(InstructionTag) {
 
     CALL: CallInstruction,
 
+    DEBUG: Register, // just prints a value from register
+
     RETURN: Register,
     HALT: void, // HALT has no data
 
@@ -67,6 +71,7 @@ pub const Instruction = union(InstructionTag) {
             .GT => |i| try writer.print("GT {d} {d} {d}", .{ i.destination, i.a, i.b }),
 
             .CALL => |i| try writer.print("CALL {d} {d}", .{ i.function_addr, i.num_of_args }),
+            .DEBUG => |i| try writer.print("DEBUG {d}", .{i}),
 
             .JMP => |i| try writer.print("JMP {d}", .{i}),
             .JMP_IF => |i| try writer.print("JMP_IF {d} {d}", .{ i.condition, i.offset }),

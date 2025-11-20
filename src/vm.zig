@@ -30,7 +30,7 @@ const CallFrame = struct {
     }
 };
 
-const VM = struct {
+pub const VM = struct {
     ip: usize,
     bytecode: []const Instruction,
     constants: []const Value,
@@ -81,6 +81,7 @@ const VM = struct {
             .LT => |value| self.lt(value),
 
             .CALL => |value| self.call(value),
+            .DEBUG => |value| std.debug.print("{f}\n", .{self.get_register(value)}),
 
             .JMP => |value| self.jump(value),
             .JMP_IF => |value| self.jump_if(value),
