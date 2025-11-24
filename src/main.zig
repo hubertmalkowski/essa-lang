@@ -13,18 +13,27 @@ pub fn main() !void {
     defer std.process.argsFree(allocator, args);
 
     if (args.len < 2) {
-        std.debug.print("Usage: {s} <file.vm> [--disassemble]\n", .{args[0]});
+        std.debug.print("Usage: {s} <file.vm> [--disassemble] [--ast]\n", .{args[0]});
         std.process.exit(1);
     }
 
     const file_path = args[1];
     var show_disassembly = false;
+    var show_ast = false;
 
     // Check for --disassemble flag
     if (args.len > 2) {
         for (args[2..]) |arg| {
             if (std.mem.eql(u8, arg, "--disassemble") or std.mem.eql(u8, arg, "-d")) {
                 show_disassembly = true;
+            }
+        }
+    }
+
+    if (args.len > 2) {
+        for (args[2..]) |arg| {
+            if (std.mem.eql(u8, arg, "--ast") or std.mem.eql(u8, arg, "-a")) {
+                show_ast = true;
             }
         }
     }
@@ -41,6 +50,9 @@ pub fn main() !void {
         std.process.exit(1);
     };
     defer ast.deinit(allocator);
+    if (show_ast) {
+        std.debug.print("AST\n\n{f}\n===\n", .{ast});
+    }
 
     var emitter = Emitter.init(allocator);
     defer emitter.deinit();

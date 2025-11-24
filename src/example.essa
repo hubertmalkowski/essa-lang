@@ -1,3 +1,5 @@
-let item = if true then 1 else 2
-debug item
-debug (if 2 == 2 then 2 else 4)
+let a = 1 
+let b = 2
+let c = if a == 1 then 3 else 4 + b
+debug c
+

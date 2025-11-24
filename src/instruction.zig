@@ -31,7 +31,7 @@ pub const ArithmeticInstruction = struct { destination: Register, a: Register, b
 pub const ComparisonInstruction = struct { destination: Register, a: Register, b: Register }; // 4 bytes
 pub const LoadInstruction = struct { register: Register, const_idx: u64 }; // 12 bytes
 pub const MoveInstruction = struct { destination: Register, source: Register }; // 4 bytes
-pub const CallInstruction = struct { function_addr: usize, num_of_args: u8 }; // 12 bytes
+pub const CallInstruction = struct { function_addr: Register, num_of_args: u8 }; // 12 bytes
 
 pub const JumpIfInstruction = struct { offset: i64, condition: Register };
 

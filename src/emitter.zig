@@ -2,6 +2,7 @@ const std = @import("std");
 const instruction = @import("instruction.zig");
 const Parser = @import("parser.zig").Parser;
 const Value = @import("value.zig").Value;
+const Closure = @import("value.zig").Closure;
 const ValueTag = @import("value.zig").ValueTag;
 const Register = @import("instruction.zig").Register;
 const syntax = @import("ast.zig");
@@ -24,7 +25,13 @@ pub const Emitter = struct {
     globals: std.StringHashMap(Register),
 
     pub fn init(allocator: std.mem.Allocator) Emitter {
-        return .{ .bytecode = std.ArrayList(instruction.Instruction).empty, .constants = std.ArrayList(Value).empty, .allocator = allocator, .next_register = 0, .globals = std.StringHashMap(Register).init(allocator) };
+        return .{
+            .bytecode = std.ArrayList(instruction.Instruction).empty,
+            .constants = std.ArrayList(Value).empty,
+            .allocator = allocator,
+            .next_register = 0,
+            .globals = std.StringHashMap(Register).init(allocator),
+        };
     }
 
     pub fn deinit(self: *Emitter) void {
@@ -72,8 +79,21 @@ pub const Emitter = struct {
             .identifier => try self.emitIdentifier(expr.identifier),
             .binary => try self.emitBinaryExpr(expr.binary),
             .if_expr => try self.emitIf(expr.if_expr),
+            .fn_expr => try self.emitFn(expr.fn_expr),
             else => 0,
         };
+    }
+
+    fn emitFn(self: *Emitter, expr: *syntax.FnExpr) anyerror!Register {
+        try self.emitChunk(.{ .JMP = 0 });
+        const fn_addr = self.bytecode.items.len;
+        const ret_reg = try self.emitExpr(expr.body);
+        try self.emitChunk(.{ .RETURN = ret_reg });
+        self.bytecode.items[fn_addr - 1].JMP = @as(i64, @intCast(self.bytecode.items.len));
+        const const_idx = try self.addConstant(Value{ .closure = .{ .arity = expr.params.len, .addr = fn_addr } });
+        const fnReg = self.allocReg();
+        try self.emitChunk(instruction.Instruction{ .LOADK = .{ .const_idx = const_idx, .register = fnReg } });
+        return fnReg;
     }
 
     fn emitIf(self: *Emitter, expr: *syntax.IfExpr) !Register {
@@ -171,6 +191,7 @@ pub const Emitter = struct {
         return switch (a) {
             .int => |a_val| a_val == b.int,
             .bool => |a_val| a_val == b.bool,
+            .closure => |a_val| a_val.addr == b.closure.addr,
             .nil => true,
         };
     }

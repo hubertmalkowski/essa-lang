@@ -10,7 +10,7 @@ const ArithmeticInstruction = @import("instruction.zig").ArithmeticInstruction;
 const LoadInstruction = @import("instruction.zig").LoadInstruction;
 const Register = @import("instruction.zig").Register;
 
-const VMError = error{ TypeError, HaltExpected, DivisionError, OutOfMemory, OutOfBounds };
+const VMError = error{ TypeError, HaltExpected, DivisionError, OutOfMemory, OutOfBounds, ArityMismatch, NotAFun };
 
 const CallFrame = struct {
     registers: [256]Value,
@@ -29,6 +29,8 @@ const CallFrame = struct {
         return cf.registers[register];
     }
 };
+
+pub const Function = struct { start: usize, arity: u8 };
 
 pub const VM = struct {
     ip: usize,
@@ -246,7 +248,9 @@ pub const VM = struct {
         for (0..num_of_args) |i| {
             current_frame.set(@intCast(i), parent_frame.get(@intCast(i)));
         }
-        self.ip = instruction.function_addr;
+        const closure = self.get_register(instruction.function_addr);
+        if(!closure.isClosure()) return VMError.NotAFun;
+        self.ip =closure. 
     }
 
     fn ret(self: *VM, register: Register) VMError!bool {
@@ -510,12 +514,23 @@ test "JMP_IF returns TypeError when condition is not boolean" {
 }
 
 test "call scenario: ADD function" {
-    const constants = [_]Value{Value{ .int = 5 }};
+    const constants = [_]Value{
+        Value{ .int = 5 },
+        Value{
+
+            .closure = .{
+                .addr = 4,
+                .arity = 2
+            }
+        }
+
+    };
 
     const bytecode = [_]Instruction{
         Instruction{ .LOADK = LoadInstruction{ .register = 0, .const_idx = 0 } }, // r0 = 5
         Instruction{ .LOADK = LoadInstruction{ .register = 1, .const_idx = 0 } }, // r1 = 5
-        Instruction{ .CALL = CallInstruction{ .function_addr = 4, .num_of_args = 2 } }, // add(5, 5)
+        Instruction{ .LOADK = LoadInstruction{.register = 2, .const_idx = 1} },
+        Instruction{ .CALL = CallInstruction{ .function_addr = 2, .num_of_args = 2 } }, // add(5, 5)
         Instruction{ .HALT = {} },
         Instruction{ .ADD = ArithmeticInstruction{ .a = 0, .b = 1, .destination = 2 } }, // arg0 + arg1
         Instruction{ .RETURN = 2 },
@@ -528,10 +543,16 @@ test "call scenario: ADD function" {
 }
 
 test "call scenario: factorial" {
-    const constants = [_]Value{ Value{ .int = 5 }, Value{ .int = 1 } };
+    const constants = [_]Value{ Value{ .int = 5 }, Value{ .int = 1 },
+        Value{ .closure = .{
+            .addr = 3,
+            .arity = 1
+        } }
+     };
 
     const bytecode = [_]Instruction{
         Instruction{ .LOADK = LoadInstruction{ .register = 0, .const_idx = 0 } }, // r0 = 5
+        Instruction{.LOADK = LoadInstruction{ .register = 1, .const_idx = 2 }},
         Instruction{ .CALL = CallInstruction{ .function_addr = 3, .num_of_args = 1 } }, // call factorial
         Instruction{ .HALT = {} },
         Instruction{ .LOADK = LoadInstruction{ .register = 1, .const_idx = 1 } }, // r1 = 1
