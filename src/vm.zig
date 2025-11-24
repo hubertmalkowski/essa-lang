@@ -241,16 +241,16 @@ pub const VM = struct {
     }
 
     fn call(self: *VM, instruction: CallInstruction) VMError!void {
+        const closure = self.get_register(instruction.function_reg);
+        if (!closure.isClosure()) return VMError.NotAFun;
         try self.insert_frame(0, self.ip);
         var current_frame = self.get_current_frame();
         var parent_frame = self.get_parent_frame();
-        const num_of_args = instruction.num_of_args;
+        const num_of_args = closure.closure.arity;
         for (0..num_of_args) |i| {
             current_frame.set(@intCast(i), parent_frame.get(@intCast(i)));
         }
-        const closure = self.get_register(instruction.function_addr);
-        if(!closure.isClosure()) return VMError.NotAFun;
-        self.ip =closure. 
+        self.ip = closure.closure.addr;
     }
 
     fn ret(self: *VM, register: Register) VMError!bool {
@@ -514,23 +514,13 @@ test "JMP_IF returns TypeError when condition is not boolean" {
 }
 
 test "call scenario: ADD function" {
-    const constants = [_]Value{
-        Value{ .int = 5 },
-        Value{
-
-            .closure = .{
-                .addr = 4,
-                .arity = 2
-            }
-        }
-
-    };
+    const constants = [_]Value{ Value{ .int = 5 }, Value{ .closure = .{ .addr = 5, .arity = 2 } } };
 
     const bytecode = [_]Instruction{
         Instruction{ .LOADK = LoadInstruction{ .register = 0, .const_idx = 0 } }, // r0 = 5
         Instruction{ .LOADK = LoadInstruction{ .register = 1, .const_idx = 0 } }, // r1 = 5
-        Instruction{ .LOADK = LoadInstruction{.register = 2, .const_idx = 1} },
-        Instruction{ .CALL = CallInstruction{ .function_addr = 2, .num_of_args = 2 } }, // add(5, 5)
+        Instruction{ .LOADK = LoadInstruction{ .register = 2, .const_idx = 1 } },
+        Instruction{ .CALL = CallInstruction{ .function_reg = 2 } }, // add(5, 5)
         Instruction{ .HALT = {} },
         Instruction{ .ADD = ArithmeticInstruction{ .a = 0, .b = 1, .destination = 2 } }, // arg0 + arg1
         Instruction{ .RETURN = 2 },
@@ -543,17 +533,13 @@ test "call scenario: ADD function" {
 }
 
 test "call scenario: factorial" {
-    const constants = [_]Value{ Value{ .int = 5 }, Value{ .int = 1 },
-        Value{ .closure = .{
-            .addr = 3,
-            .arity = 1
-        } }
-     };
+    const constants = [_]Value{ Value{ .int = 5 }, Value{ .int = 1 }, Value{ .closure = .{ .addr = 5, .arity = 1 } } };
 
     const bytecode = [_]Instruction{
         Instruction{ .LOADK = LoadInstruction{ .register = 0, .const_idx = 0 } }, // r0 = 5
-        Instruction{.LOADK = LoadInstruction{ .register = 1, .const_idx = 2 }},
-        Instruction{ .CALL = CallInstruction{ .function_addr = 3, .num_of_args = 1 } }, // call factorial
+        Instruction{ .LOADK = LoadInstruction{ .register = 1, .const_idx = 2 } },
+        Instruction{ .LOADK = LoadInstruction{ .register = 2, .const_idx = 2 } },
+        Instruction{ .CALL = CallInstruction{ .function_reg = 2 } }, // call factorial
         Instruction{ .HALT = {} },
         Instruction{ .LOADK = LoadInstruction{ .register = 1, .const_idx = 1 } }, // r1 = 1
         Instruction{ .GT = ComparisonInstruction{ .a = 0, .b = 1, .destination = 2 } }, // r2 = (n > 1)
@@ -562,7 +548,8 @@ test "call scenario: factorial" {
         Instruction{ .SUB = ArithmeticInstruction{ .destination = 1, .a = 0, .b = 1 } }, // r1 = r0 - 1
         Instruction{ .MOVE = MoveInstruction{ .destination = 3, .source = 0 } }, // move r0 to r3,
         Instruction{ .MOVE = MoveInstruction{ .destination = 0, .source = 1 } }, // set (n - 1) as an argument
-        Instruction{ .CALL = CallInstruction{ .function_addr = 3, .num_of_args = 1 } },
+        Instruction{ .LOADK = LoadInstruction{ .register = 4, .const_idx = 2 } },
+        Instruction{ .CALL = CallInstruction{ .function_reg = 4 } },
         Instruction{ .MUL = ArithmeticInstruction{ .destination = 0, .a = 0, .b = 3 } }, // r0 = factorial(n - 1) * n
         Instruction{ .RETURN = 0 },
     };

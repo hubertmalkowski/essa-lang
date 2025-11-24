@@ -3,6 +3,7 @@ const std = @import("std");
 pub const Expr = union(enum) {
     integer: i64,
     boolean: bool,
+    unit: void,
     identifier: []const u8,
     binary: *BinaryExpr,
     if_expr: *IfExpr,
@@ -11,7 +12,7 @@ pub const Expr = union(enum) {
 
     pub fn deinit(self: Expr, allocator: std.mem.Allocator) void {
         switch (self) {
-            .integer, .boolean, .identifier => {
+            .integer, .boolean, .unit, .identifier => {
                 // No allocation, nothing to free
             },
             .binary => |bin| {
@@ -41,10 +42,11 @@ pub const Expr = union(enum) {
         }
     }
 
-    pub fn format(self: Expr, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+    pub fn format(self: Expr, writer: anytype) !void {
         switch (self) {
             .integer => |val| try writer.print("{d}", .{val}),
             .boolean => |val| try writer.print("{}", .{val}),
+            .unit => try writer.writeAll("()"),
             .identifier => |name| try writer.print("{s}", .{name}),
             .binary => |bin| {
                 try writer.writeAll("(");
@@ -75,7 +77,7 @@ pub const Expr = union(enum) {
                 try writer.writeAll(")");
             },
             .call => |c| {
-                try writer.writeAll("(");
+                try writer.writeAll("call(");
                 try c.function.format(writer);
                 for (c.args) |arg| {
                     try writer.writeAll(" ");
@@ -127,7 +129,7 @@ pub const Statement = union(enum) {
         }
     }
 
-    pub fn format(self: Statement, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+    pub fn format(self: Statement, writer: anytype) !void {
         switch (self) {
             .definition => |def| {
                 try writer.print("{s} = ", .{def.name});
@@ -151,7 +153,7 @@ pub const Ast = struct {
         allocator.free(self.statements);
     }
 
-    pub fn format(self: *const Ast, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+    pub fn format(self: *const Ast, writer: anytype) !void {
         for (self.statements) |stmt| {
             try stmt.format(writer);
             try writer.writeAll("\n");
@@ -183,8 +185,8 @@ test "ast printer formats simple expressions" {
 
     var buffer: [256]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
-    var writer = fbs.writer().any();
-    try ast.format(&writer);
+    const writer = fbs.writer();
+    try ast.format(writer);
 
     const expected = "x = (5 Add 3)\n";
     try std.testing.expectEqualStrings(expected, fbs.getWritten());
@@ -211,8 +213,8 @@ test "ast printer formats if expressions" {
 
     var buffer: [256]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
-    var writer = fbs.writer().any();
-    try ast.format(&writer);
+    const writer = fbs.writer();
+    try ast.format(writer);
 
     const expected = "debug (if true then 1 else 2)\n";
     try std.testing.expectEqualStrings(expected, fbs.getWritten());

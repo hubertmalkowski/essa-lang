@@ -80,6 +80,7 @@ pub const Emitter = struct {
             .binary => try self.emitBinaryExpr(expr.binary),
             .if_expr => try self.emitIf(expr.if_expr),
             .fn_expr => try self.emitFn(expr.fn_expr),
+            .call => try self.emitCall(expr.call),
             else => 0,
         };
     }
@@ -89,11 +90,17 @@ pub const Emitter = struct {
         const fn_addr = self.bytecode.items.len;
         const ret_reg = try self.emitExpr(expr.body);
         try self.emitChunk(.{ .RETURN = ret_reg });
-        self.bytecode.items[fn_addr - 1].JMP = @as(i64, @intCast(self.bytecode.items.len));
+        self.bytecode.items[fn_addr - 1].JMP = calcOffset(fn_addr, self.bytecode.items.len + 1);
         const const_idx = try self.addConstant(Value{ .closure = .{ .arity = expr.params.len, .addr = fn_addr } });
         const fnReg = self.allocReg();
         try self.emitChunk(instruction.Instruction{ .LOADK = .{ .const_idx = const_idx, .register = fnReg } });
         return fnReg;
+    }
+
+    fn emitCall(self: *Emitter, expr: *syntax.CallExpr) anyerror!Register {
+        const function = try self.emitIdentifier(expr.function.identifier);
+        try self.emitChunk(instruction.Instruction{ .CALL = .{ .function_reg = function } });
+        return 0;
     }
 
     fn emitIf(self: *Emitter, expr: *syntax.IfExpr) !Register {
@@ -123,6 +130,11 @@ pub const Emitter = struct {
         self.bytecode.items[jmp_index].JMP = jmp_offset;
 
         return resultReg;
+    }
+
+    fn calcOffset(to: usize, from: usize) i64 {
+        return @as(i64, @intCast(from)) -
+            @as(i64, @intCast(to + 1));
     }
 
     fn emitInteger(self: *Emitter, number: i64) !Register {

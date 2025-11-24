@@ -1,5 +1,5 @@
-let a = 1 
-let b = 2
-let c = if a == 1 then 3 else 4 + b
-debug c
-
+let a = fn => 2 + 2
+let b = fn => 10 + 10
+let c = 2
+let d = b ()
+debug if c == 2 then a () + d + b () else b ()

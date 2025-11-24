@@ -79,8 +79,8 @@ pub const Disassembler = struct {
                 break :blk instructionLength("JMP_IF", .{ i.condition, i.offset });
             },
             .CALL => |i| blk: {
-                std.debug.print("CALL {d} {d}", .{ i.function_addr, i.num_of_args });
-                break :blk instructionLength("CALL", .{ i.function_addr, i.num_of_args });
+                std.debug.print("CALL {d}", .{i.function_reg});
+                break :blk instructionLength("CALL", .{i.function_reg});
             },
             .DEBUG => |reg| blk: {
                 std.debug.print("DEBUG {d}", .{reg});
@@ -164,7 +164,7 @@ pub const Disassembler = struct {
                 std.debug.print("if r{d} == true then jump to {d}", .{ i.condition, target });
             },
             .CALL => |i| {
-                std.debug.print("call function at {d} with {d} args", .{ i.function_addr, i.num_of_args });
+                std.debug.print("call function at r{d}", .{i.function_reg});
             },
             .DEBUG => |reg| {
                 std.debug.print("print r{d}", .{reg});

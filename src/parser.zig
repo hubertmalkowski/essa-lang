@@ -91,9 +91,19 @@ pub const Parser = struct {
         _ = try self.expect(.FN);
         var params = std.ArrayList([]const u8).empty;
 
-        while (self.tokenizer.peekToken().tag != .ARROW) {
-            const param = try self.expect(.IDENT);
-            try params.append(self.allocator, param.lexeme(self.source));
+        // Check for unit parameter: fn () => expr
+        if (self.tokenizer.peekToken().tag == .LPAREN) {
+            _ = self.tokenizer.next();
+            _ = try self.expect(.RPAREN);
+            // Unit parameter - represented as a single parameter named "()"
+            // This is a special marker that we'll use for zero-arg functions
+            try params.append(self.allocator, "()");
+        } else {
+            // Regular parameters: fn x => expr or fn a b => expr
+            while (self.tokenizer.peekToken().tag != .ARROW) {
+                const param = try self.expect(.IDENT);
+                try params.append(self.allocator, param.lexeme(self.source));
+            }
         }
 
         _ = try self.expect(.ARROW);
@@ -255,6 +265,11 @@ pub const Parser = struct {
             },
             .LPAREN => {
                 _ = self.tokenizer.next();
+                // Check if this is unit () or a parenthesized expression
+                if (self.tokenizer.peekToken().tag == .RPAREN) {
+                    _ = self.tokenizer.next();
+                    return ast.Expr{ .unit = {} };
+                }
                 const expr = try self.expression();
                 _ = try self.expect(.RPAREN);
                 return expr;
@@ -600,4 +615,44 @@ test "parse mixed statements" {
     try std.testing.expect(program.statements[0] == .definition);
     try std.testing.expect(program.statements[1] == .debug);
     try std.testing.expect(program.statements[2] == .definition);
+}
+
+test "parse unit literal" {
+    const source = "let x = ()";
+    var parser = Parser.init(std.testing.allocator, source);
+    const program = try parser.parse();
+    defer program.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), program.statements.len);
+    try std.testing.expect(program.statements[0].definition.value == .unit);
+}
+
+test "parse function with unit parameter" {
+    const source = "let f = fn () => 42";
+    var parser = Parser.init(std.testing.allocator, source);
+    const program = try parser.parse();
+    defer program.deinit(std.testing.allocator);
+
+    const expr = program.statements[0].definition.value;
+    try std.testing.expect(expr == .fn_expr);
+
+    const fn_expr = expr.fn_expr;
+    try std.testing.expectEqual(@as(usize, 1), fn_expr.params.len);
+    try std.testing.expectEqualStrings("()", fn_expr.params[0]);
+    try std.testing.expectEqual(@as(i64, 42), fn_expr.body.integer);
+}
+
+test "parse function call with unit argument" {
+    const source = "let result = f ()";
+    var parser = Parser.init(std.testing.allocator, source);
+    const program = try parser.parse();
+    defer program.deinit(std.testing.allocator);
+
+    const expr = program.statements[0].definition.value;
+    try std.testing.expect(expr == .call);
+
+    const call = expr.call;
+    try std.testing.expectEqualStrings("f", call.function.identifier);
+    try std.testing.expectEqual(@as(usize, 1), call.args.len);
+    try std.testing.expect(call.args[0] == .unit);
 }

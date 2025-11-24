@@ -31,7 +31,7 @@ pub const ArithmeticInstruction = struct { destination: Register, a: Register, b
 pub const ComparisonInstruction = struct { destination: Register, a: Register, b: Register }; // 4 bytes
 pub const LoadInstruction = struct { register: Register, const_idx: u64 }; // 12 bytes
 pub const MoveInstruction = struct { destination: Register, source: Register }; // 4 bytes
-pub const CallInstruction = struct { function_addr: Register, num_of_args: u8 }; // 12 bytes
+pub const CallInstruction = struct { function_reg: Register }; // 12 bytes
 
 pub const JumpIfInstruction = struct { offset: i64, condition: Register };
 
@@ -70,7 +70,7 @@ pub const Instruction = union(InstructionTag) {
             .LT => |i| try writer.print("LT {d} {d} {d}", .{ i.destination, i.a, i.b }),
             .GT => |i| try writer.print("GT {d} {d} {d}", .{ i.destination, i.a, i.b }),
 
-            .CALL => |i| try writer.print("CALL {d} {d}", .{ i.function_addr, i.num_of_args }),
+            .CALL => |i| try writer.print("CALL {d}", .{i.function_reg}),
             .DEBUG => |i| try writer.print("DEBUG {d}", .{i}),
 
             .JMP => |i| try writer.print("JMP {d}", .{i}),
