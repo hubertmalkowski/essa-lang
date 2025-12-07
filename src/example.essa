@@ -1,4 +1,5 @@
-
-
-let a = fn => 0
-debug a ()
+let a = fn b d => 
+	if b > d then 
+		b 
+	else (a (b + 1) d)
+debug (a 2 3)

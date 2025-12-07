@@ -78,9 +78,13 @@ pub const Disassembler = struct {
                 std.debug.print("JMP_IF {d} {d}", .{ i.condition, i.offset });
                 break :blk instructionLength("JMP_IF", .{ i.condition, i.offset });
             },
+            .MAKE_CLOSURE => |i| blk: {
+                std.debug.print("MAKE_CLOSURE r{d} @{d} arity={d} captures={any}", .{ i.destination, i.addr, i.arity, i.captures });
+                break :blk 20; // Approximate length
+            },
             .CALL => |i| blk: {
-                std.debug.print("CALL {d}", .{i.function_reg});
-                break :blk instructionLength("CALL", .{i.function_reg});
+                std.debug.print("CALL {d} {d}", .{ i.function_reg, i.param_reg });
+                break :blk instructionLength("CALL", .{ i.function_reg, i.param_reg });
             },
             .DEBUG => |reg| blk: {
                 std.debug.print("DEBUG {d}", .{reg});
@@ -163,8 +167,11 @@ pub const Disassembler = struct {
                 const target = @as(i64, @intCast(addr)) + i.offset + 1;
                 std.debug.print("if r{d} == true then jump to {d}", .{ i.condition, target });
             },
+            .MAKE_CLOSURE => |i| {
+                std.debug.print("r{d} <- closure @{d} with {d} captures", .{ i.destination, i.addr, i.captures.len });
+            },
             .CALL => |i| {
-                std.debug.print("call function at r{d}", .{i.function_reg});
+                std.debug.print("call r{d} with params starting at r{d}", .{ i.function_reg, i.param_reg });
             },
             .DEBUG => |reg| {
                 std.debug.print("print r{d}", .{reg});
