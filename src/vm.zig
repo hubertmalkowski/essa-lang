@@ -1,5 +1,7 @@
 const std = @import("std");
 const Value = @import("value.zig").Value;
+const ObjectType = @import("value.zig").ObjectType;
+const Closure = @import("value.zig").Closure;
 const ValueTag = @import("value.zig").ValueTag;
 const ComparisonInstruction = @import("instruction.zig").ComparisonInstruction;
 const CallInstruction = @import("instruction.zig").CallInstruction;
@@ -9,6 +11,7 @@ const MoveInstruction = @import("instruction.zig").MoveInstruction;
 const ArithmeticInstruction = @import("instruction.zig").ArithmeticInstruction;
 const LoadInstruction = @import("instruction.zig").LoadInstruction;
 const Register = @import("instruction.zig").Register;
+const MakeClosureInstruction = @import("instruction.zig").MakeClosureInstruction;
 
 const VMError = error{ TypeError, HaltExpected, DivisionError, OutOfMemory, OutOfBounds, ArityMismatch, NotAFun };
 
@@ -28,6 +31,19 @@ const CallFrame = struct {
     fn get(cf: *CallFrame, register: Register) Value {
         return cf.registers[register];
     }
+
+    pub fn format(
+        self: CallFrame,
+        writer: *std.io.Writer,
+    ) std.io.Writer.Error!void {
+        try writer.print("CallFrame{{ result_reg=r{d}, return_addr={d}, registers=[", .{ self.result_register, self.return_address });
+        for (self.registers, 0..) |reg, i| {
+            if (reg != .nil) {
+                try writer.print("r{d}={f} ", .{ i, reg });
+            }
+        }
+        try writer.writeAll("] }");
+    }
 };
 
 pub const Function = struct { start: usize, arity: u8 };
@@ -46,6 +62,22 @@ pub const VM = struct {
     }
 
     pub fn deinit(self: *VM) void {
+        for (self.constants) |constant| {
+            if (constant.isClosure()) {
+                self.allocator.free(constant.closure.captures);
+                self.allocator.destroy(constant.closure);
+            }
+        }
+
+        for (self.frames.items) |frame| {
+            for (frame.registers) |register| {
+                if (register.isClosure()) {
+                    self.allocator.free(register.closure.captures);
+                    self.allocator.destroy(register.closure);
+                }
+            }
+        }
+
         self.frames.deinit(self.allocator);
     }
 
@@ -66,7 +98,7 @@ pub const VM = struct {
             instruction = try self.fetch();
         }
 
-        // std.debug.print("{f} \n", .{instruction});
+        // std.debug.print("{any} \n", .{instruction});
     }
 
     fn interpret(self: *VM, instruction: Instruction) VMError!void {
@@ -82,6 +114,7 @@ pub const VM = struct {
             .EQ => |value| self.eq(value),
             .LT => |value| self.lt(value),
 
+            .MAKE_CLOSURE => |value| self.make_closure(value),
             .CALL => |value| self.call(value),
             .DEBUG => |value| std.debug.print("{f}\n", .{self.get_register(value)}),
 
@@ -247,8 +280,12 @@ pub const VM = struct {
         var current_frame = self.get_current_frame();
         var parent_frame = self.get_parent_frame();
         const num_of_args = closure.closure.arity;
+        for (closure.closure.captures, 0..) |capture, i| {
+            current_frame.set(@intCast(i), capture);
+        }
+        const num_of_captures = closure.closure.captures.len;
         for (0..num_of_args) |i| {
-            current_frame.set(@intCast(i), parent_frame.get(@intCast(i)));
+            current_frame.set(@intCast(i + num_of_captures), parent_frame.get(@as(u8, @intCast(i)) + instruction.param_reg));
         }
         self.ip = closure.closure.addr;
     }
@@ -262,6 +299,23 @@ pub const VM = struct {
         if (shouldStop) return true;
         self.set_register(0, return_value);
         return false;
+    }
+
+    fn make_closure(self: *VM, instruction: MakeClosureInstruction) VMError!void {
+        const closure = try self.allocator.create(Closure);
+        closure.* = Closure{
+            .object = .{ .marked = false, .next = null, .type = ObjectType.closure },
+            .addr = instruction.addr,
+            .arity = instruction.arity,
+            .captures = &[_]Value{}, // empty for now
+        };
+        self.set_register(instruction.destination, Value{ .closure = closure });
+        var captures = std.ArrayList(Value).empty;
+        for (instruction.captures) |captureReg| {
+            const value = self.get_register(captureReg);
+            try captures.append(self.allocator, value);
+        }
+        closure.*.captures = try captures.toOwnedSlice(self.allocator);
     }
 };
 
@@ -514,13 +568,13 @@ test "JMP_IF returns TypeError when condition is not boolean" {
 }
 
 test "call scenario: ADD function" {
-    const constants = [_]Value{ Value{ .int = 5 }, Value{ .closure = .{ .addr = 5, .arity = 2 } } };
+    const constants = [_]Value{Value{ .int = 5 }};
 
     const bytecode = [_]Instruction{
         Instruction{ .LOADK = LoadInstruction{ .register = 0, .const_idx = 0 } }, // r0 = 5
         Instruction{ .LOADK = LoadInstruction{ .register = 1, .const_idx = 0 } }, // r1 = 5
-        Instruction{ .LOADK = LoadInstruction{ .register = 2, .const_idx = 1 } },
-        Instruction{ .CALL = CallInstruction{ .function_reg = 2 } }, // add(5, 5)
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 2, .arity = 2, .captures = &[_]Register{}, .addr = 5 } }, // r0 = Function(arity:2) addr = 5
+        Instruction{ .CALL = CallInstruction{ .function_reg = 2, .param_reg = 0 } }, // add(5, 5)
         Instruction{ .HALT = {} },
         Instruction{ .ADD = ArithmeticInstruction{ .a = 0, .b = 1, .destination = 2 } }, // arg0 + arg1
         Instruction{ .RETURN = 2 },
@@ -533,25 +587,27 @@ test "call scenario: ADD function" {
 }
 
 test "call scenario: factorial" {
-    const constants = [_]Value{ Value{ .int = 5 }, Value{ .int = 1 }, Value{ .closure = .{ .addr = 5, .arity = 1 } } };
+    const constants = [_]Value{
+        Value{ .int = 5 },
+        Value{ .int = 1 },
+    };
 
     const bytecode = [_]Instruction{
         Instruction{ .LOADK = LoadInstruction{ .register = 0, .const_idx = 0 } }, // r0 = 5
-        Instruction{ .LOADK = LoadInstruction{ .register = 1, .const_idx = 2 } },
-        Instruction{ .LOADK = LoadInstruction{ .register = 2, .const_idx = 2 } },
-        Instruction{ .CALL = CallInstruction{ .function_reg = 2 } }, // call factorial
+        Instruction{ .LOADK = LoadInstruction{ .register = 1, .const_idx = 1 } },
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 2, .addr = 5, .arity = 1, .captures = &[_]Register{2} } },
+        Instruction{ .CALL = CallInstruction{ .function_reg = 2, .param_reg = 0 } }, // call factorial
         Instruction{ .HALT = {} },
-        Instruction{ .LOADK = LoadInstruction{ .register = 1, .const_idx = 1 } }, // r1 = 1
-        Instruction{ .GT = ComparisonInstruction{ .a = 0, .b = 1, .destination = 2 } }, // r2 = (n > 1)
-        Instruction{ .JMP_IF = JumpIfInstruction{ .condition = 2, .offset = 1 } }, // if (n > 1) skip next instruction
-        Instruction{ .RETURN = 1 }, // We already have 1 in register 1
-        Instruction{ .SUB = ArithmeticInstruction{ .destination = 1, .a = 0, .b = 1 } }, // r1 = r0 - 1
-        Instruction{ .MOVE = MoveInstruction{ .destination = 3, .source = 0 } }, // move r0 to r3,
-        Instruction{ .MOVE = MoveInstruction{ .destination = 0, .source = 1 } }, // set (n - 1) as an argument
-        Instruction{ .LOADK = LoadInstruction{ .register = 4, .const_idx = 2 } },
-        Instruction{ .CALL = CallInstruction{ .function_reg = 4 } },
-        Instruction{ .MUL = ArithmeticInstruction{ .destination = 0, .a = 0, .b = 3 } }, // r0 = factorial(n - 1) * n
-        Instruction{ .RETURN = 0 },
+        Instruction{ .LOADK = LoadInstruction{ .register = 2, .const_idx = 1 } }, // r2 = 1
+        Instruction{ .GT = ComparisonInstruction{ .a = 1, .b = 2, .destination = 3 } }, // r3 = (n > 1)
+        Instruction{ .JMP_IF = JumpIfInstruction{ .condition = 3, .offset = 1 } }, // if (n > 1) skip next instruction
+        Instruction{ .RETURN = 2 }, // return 1 from r2
+        Instruction{ .SUB = ArithmeticInstruction{ .destination = 3, .a = 1, .b = 2 } }, // r3 = n - 1
+        Instruction{ .MOVE = MoveInstruction{ .destination = 4, .source = 1 } }, // save n to r4
+        Instruction{ .MOVE = MoveInstruction{ .destination = 1, .source = 3 } }, // set (n - 1) as argument in r1
+        Instruction{ .CALL = CallInstruction{ .function_reg = 0, .param_reg = 1 } },
+        Instruction{ .MUL = ArithmeticInstruction{ .destination = 1, .a = 0, .b = 4 } }, // r1 = factorial(n - 1) * n
+        Instruction{ .RETURN = 1 },
     };
 
     var vm = try VM.init(std.testing.allocator, &bytecode, &constants);

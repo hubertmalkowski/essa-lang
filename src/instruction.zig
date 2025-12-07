@@ -19,6 +19,8 @@ pub const InstructionTag = enum {
     JMP,
     JMP_IF,
 
+    MAKE_CLOSURE, // Makes closure and accepts following parameters: register where to save function, addr (index of function declaration), arity: (number of params), Array of registers to capture
+
     CALL,
 
     DEBUG,
@@ -31,7 +33,12 @@ pub const ArithmeticInstruction = struct { destination: Register, a: Register, b
 pub const ComparisonInstruction = struct { destination: Register, a: Register, b: Register }; // 4 bytes
 pub const LoadInstruction = struct { register: Register, const_idx: u64 }; // 12 bytes
 pub const MoveInstruction = struct { destination: Register, source: Register }; // 4 bytes
-pub const CallInstruction = struct { function_reg: Register }; // 12 bytes
+pub const CallInstruction = struct {
+    function_reg: Register,
+    param_reg: Register,
+}; // 12 bytes
+//
+pub const MakeClosureInstruction = struct { destination: Register, addr: usize, arity: u8, captures: []const Register };
 
 pub const JumpIfInstruction = struct { offset: i64, condition: Register };
 
@@ -49,6 +56,7 @@ pub const Instruction = union(InstructionTag) {
     JMP: i64,
     JMP_IF: JumpIfInstruction,
 
+    MAKE_CLOSURE: MakeClosureInstruction,
     CALL: CallInstruction,
 
     DEBUG: Register, // just prints a value from register
@@ -70,6 +78,7 @@ pub const Instruction = union(InstructionTag) {
             .LT => |i| try writer.print("LT {d} {d} {d}", .{ i.destination, i.a, i.b }),
             .GT => |i| try writer.print("GT {d} {d} {d}", .{ i.destination, i.a, i.b }),
 
+            .MAKE_CLOSURE => |i| try writer.print("MAKE_CLOSURE r{d} {d} {d} {any}", .{ i.destination, i.addr, i.arity, i.captures }),
             .CALL => |i| try writer.print("CALL {d}", .{i.function_reg}),
             .DEBUG => |i| try writer.print("DEBUG {d}", .{i}),
 

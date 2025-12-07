@@ -14,6 +14,17 @@ const CompiledProgram = struct {
 
 const CompilerError = error{UndefinedVariable};
 
+const Environment = struct {
+    parent: ?*Environment,
+    upvalues: std.ArrayList(Register),
+    next_register: u8,
+    locals: std.StringHashMap(Register),
+
+    fn init(parent: ?*Environment) Environment {
+        return Environment{ .parent = parent, .upvalues = std.ArrayList(Register).empty, .next_register = 0, .locals = std.StringHashMap(Register) };
+    }
+};
+
 pub const Emitter = struct {
     bytecode: std.ArrayList(instruction.Instruction),
     constants: std.ArrayList(Value),
@@ -23,6 +34,7 @@ pub const Emitter = struct {
     next_register: u8,
 
     globals: std.StringHashMap(Register),
+    env: Environment,
 
     pub fn init(allocator: std.mem.Allocator) Emitter {
         return .{
@@ -85,13 +97,22 @@ pub const Emitter = struct {
         };
     }
 
+    // Initial plan for functions and upvalues
+    // let add = fn x y => x + y
+    // adds this badboy to constants (Closure{fn_addr: 68, arity: 2})
+    // emit this for add
+    // MAKE_CLOSURE r1 0 [] ; Load function into r1, with
+    //
+    //
     fn emitFn(self: *Emitter, expr: *syntax.FnExpr) anyerror!Register {
         try self.emitChunk(.{ .JMP = 0 });
         const fn_addr = self.bytecode.items.len;
         const ret_reg = try self.emitExpr(expr.body);
         try self.emitChunk(.{ .RETURN = ret_reg });
         self.bytecode.items[fn_addr - 1].JMP = calcOffset(fn_addr, self.bytecode.items.len + 1);
-        const const_idx = try self.addConstant(Value{ .closure = .{ .arity = expr.params.len, .addr = fn_addr } });
+        const closure = try self.allocator.create(Closure);
+        closure.* = Closure{ .addr = fn_addr, .arity = expr.params.len };
+        const const_idx = try self.addConstant(Value{ .closure = closure });
         const fnReg = self.allocReg();
         try self.emitChunk(instruction.Instruction{ .LOADK = .{ .const_idx = const_idx, .register = fnReg } });
         return fnReg;
