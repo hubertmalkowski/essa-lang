@@ -4,7 +4,11 @@ const Register = @import("instruction.zig").Register;
 pub const ValueTag = enum { int, bool, closure, nil };
 
 pub const ObjectType = enum { closure };
-pub const Object = struct { marked: bool, next: ?*Object, type: ObjectType };
+pub const Object = struct {
+    marked: bool,
+    next: ?*Object,
+    type: ObjectType,
+};
 
 pub const Closure = struct { object: Object, addr: usize, arity: usize, captures: []Value };
 

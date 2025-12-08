@@ -12,10 +12,11 @@ const ArithmeticInstruction = @import("instruction.zig").ArithmeticInstruction;
 const LoadInstruction = @import("instruction.zig").LoadInstruction;
 const Register = @import("instruction.zig").Register;
 const MakeClosureInstruction = @import("instruction.zig").MakeClosureInstruction;
+const gc = @import("gc.zig");
 
 const VMError = error{ TypeError, HaltExpected, DivisionError, OutOfMemory, OutOfBounds, ArityMismatch, NotAFun };
 
-const CallFrame = struct {
+pub const CallFrame = struct {
     registers: [256]Value,
     result_register: Register,
     return_address: usize,
@@ -54,30 +55,23 @@ pub const VM = struct {
     constants: []const Value,
     frames: std.ArrayList(CallFrame),
     allocator: std.mem.Allocator,
+    gc: gc.GCSweep,
 
     pub fn init(allocator: std.mem.Allocator, bytecode: []const Instruction, constants: []const Value) !VM {
         var frames = std.ArrayList(CallFrame).empty;
         try frames.append(allocator, CallFrame.init(0, 0));
-        return VM{ .frames = frames, .ip = 0, .bytecode = bytecode, .constants = constants, .allocator = allocator };
+        return VM{
+            .frames = frames,
+            .ip = 0,
+            .bytecode = bytecode,
+            .constants = constants,
+            .allocator = allocator,
+            .gc = gc.GCSweep.init(),
+        };
     }
 
     pub fn deinit(self: *VM) void {
-        for (self.constants) |constant| {
-            if (constant.isClosure()) {
-                self.allocator.free(constant.closure.captures);
-                self.allocator.destroy(constant.closure);
-            }
-        }
-
-        for (self.frames.items) |frame| {
-            for (frame.registers) |register| {
-                if (register.isClosure()) {
-                    self.allocator.free(register.closure.captures);
-                    self.allocator.destroy(register.closure);
-                }
-            }
-        }
-
+        self.gc.sweep(self.allocator);
         self.frames.deinit(self.allocator);
     }
 
@@ -273,6 +267,12 @@ pub const VM = struct {
         if (condition.bool) return self.jump(instruction.offset);
     }
 
+    // When function is called - we take function value and:
+    // Insert new call frame
+    // Copy all n captures to r0..n registers
+    // Copy all m parameters to n..m registers
+    // Jump to the function bytecode
+    // Return the result of function call to r0
     fn call(self: *VM, instruction: CallInstruction) VMError!void {
         const closure = self.get_register(instruction.function_reg);
         if (!closure.isClosure()) return VMError.NotAFun;
@@ -302,13 +302,11 @@ pub const VM = struct {
     }
 
     fn make_closure(self: *VM, instruction: MakeClosureInstruction) VMError!void {
-        const closure = try self.allocator.create(Closure);
-        closure.* = Closure{
-            .object = .{ .marked = false, .next = null, .type = ObjectType.closure },
-            .addr = instruction.addr,
-            .arity = instruction.arity,
-            .captures = &[_]Value{}, // empty for now
-        };
+        const closure = try self.gc.allocObject(self.allocator, self.frames.items, Closure);
+        closure.*.object.type = ObjectType.closure;
+        closure.*.addr = instruction.addr;
+        closure.*.arity = instruction.arity;
+        closure.*.captures = &[_]Value{};
         self.set_register(instruction.destination, Value{ .closure = closure });
         var captures = std.ArrayList(Value).empty;
         for (instruction.captures) |captureReg| {
@@ -615,4 +613,102 @@ test "call scenario: factorial" {
     try vm.run();
 
     try std.testing.expectEqual(120, vm.get_register(0).int);
+}
+
+test "many closures with captures and register overrides - no memory leaks" {
+    // This test creates lots of closures in different registers,
+    // each capturing some of the closures created above.
+    // It also overrides registers to test GC properly collects unreachable closures.
+
+    const constants = [_]Value{
+        Value{ .int = 42 },
+        Value{ .int = 10 },
+        Value{ .int = 20 },
+    };
+
+    const bytecode = [_]Instruction{
+        // Create closure 1 in r0 (no captures)
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 0, .addr = 100, .arity = 0, .captures = &[_]Register{} } },
+
+        // Create closure 2 in r1 (no captures)
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 1, .addr = 101, .arity = 0, .captures = &[_]Register{} } },
+
+        // Create closure 3 in r2 capturing r0
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 2, .addr = 102, .arity = 0, .captures = &[_]Register{0} } },
+
+        // Create closure 4 in r3 capturing r0 and r1
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 3, .addr = 103, .arity = 0, .captures = &[_]Register{ 0, 1 } } },
+
+        // Create closure 5 in r4 capturing r2 (which captures r0)
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 4, .addr = 104, .arity = 0, .captures = &[_]Register{2} } },
+
+        // Create closure 6 in r5 capturing r2, r3, r4
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 5, .addr = 105, .arity = 0, .captures = &[_]Register{ 2, 3, 4 } } },
+
+        // Override r0 with a new closure (old closure in r0 should be GC'd if not captured)
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 0, .addr = 106, .arity = 0, .captures = &[_]Register{} } },
+
+        // Override r1 with another closure
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 1, .addr = 107, .arity = 0, .captures = &[_]Register{5} } },
+
+        // Create more closures in higher registers
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 10, .addr = 108, .arity = 0, .captures = &[_]Register{ 1, 5 } } },
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 11, .addr = 109, .arity = 0, .captures = &[_]Register{10} } },
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 12, .addr = 110, .arity = 0, .captures = &[_]Register{ 10, 11 } } },
+
+        // Override some registers again
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 3, .addr = 111, .arity = 0, .captures = &[_]Register{12} } },
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 4, .addr = 112, .arity = 0, .captures = &[_]Register{ 3, 12 } } },
+
+        // Create even more closures to stress test
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 20, .addr = 113, .arity = 0, .captures = &[_]Register{4} } },
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 21, .addr = 114, .arity = 0, .captures = &[_]Register{ 20, 12 } } },
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 22, .addr = 115, .arity = 0, .captures = &[_]Register{ 21, 20, 11 } } },
+
+        // Override earlier registers with new closures
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 0, .addr = 116, .arity = 0, .captures = &[_]Register{22} } },
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 1, .addr = 117, .arity = 0, .captures = &[_]Register{ 22, 21 } } },
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 2, .addr = 118, .arity = 0, .captures = &[_]Register{ 1, 0 } } },
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 0, .addr = 116, .arity = 0, .captures = &[_]Register{22} } },
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 1, .addr = 117, .arity = 0, .captures = &[_]Register{ 22, 21 } } },
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 2, .addr = 118, .arity = 0, .captures = &[_]Register{ 1, 0 } } },
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 0, .addr = 116, .arity = 0, .captures = &[_]Register{22} } },
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 1, .addr = 117, .arity = 0, .captures = &[_]Register{ 22, 21 } } },
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 2, .addr = 118, .arity = 0, .captures = &[_]Register{ 1, 0 } } },
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 0, .addr = 116, .arity = 0, .captures = &[_]Register{22} } },
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 1, .addr = 117, .arity = 0, .captures = &[_]Register{ 22, 21 } } },
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 2, .addr = 118, .arity = 0, .captures = &[_]Register{ 1, 0 } } },
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 0, .addr = 116, .arity = 0, .captures = &[_]Register{22} } },
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 1, .addr = 117, .arity = 0, .captures = &[_]Register{ 22, 21 } } },
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 2, .addr = 118, .arity = 0, .captures = &[_]Register{ 1, 0 } } },
+
+        // Load some constants and create closures (mix of operations)
+        Instruction{ .LOADK = LoadInstruction{ .register = 50, .const_idx = 0 } },
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 51, .addr = 119, .arity = 0, .captures = &[_]Register{2} } },
+
+        // More register overrides
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 10, .addr = 120, .arity = 0, .captures = &[_]Register{51} } },
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 11, .addr = 121, .arity = 0, .captures = &[_]Register{ 10, 51 } } },
+
+        // Create final batch of closures
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 30, .addr = 122, .arity = 0, .captures = &[_]Register{ 11, 2, 1 } } },
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 31, .addr = 123, .arity = 0, .captures = &[_]Register{30} } },
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 32, .addr = 124, .arity = 0, .captures = &[_]Register{ 30, 31 } } },
+
+        // Override many registers at once
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 0, .addr = 125, .arity = 0, .captures = &[_]Register{} } },
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 1, .addr = 126, .arity = 0, .captures = &[_]Register{} } },
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 2, .addr = 127, .arity = 0, .captures = &[_]Register{} } },
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 3, .addr = 128, .arity = 0, .captures = &[_]Register{} } },
+        Instruction{ .MAKE_CLOSURE = .{ .destination = 4, .addr = 129, .arity = 0, .captures = &[_]Register{} } },
+
+        Instruction{ .HALT = {} },
+    };
+
+    var vm = try VM.init(std.testing.allocator, &bytecode, &constants);
+    defer vm.deinit();
+    try vm.run();
+
+    // If we get here without leaks, the test passes
+    // The defer vm.deinit() will call gc.sweep() which should clean up all closures
 }
