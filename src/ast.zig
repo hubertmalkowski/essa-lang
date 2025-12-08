@@ -1,4 +1,6 @@
 const std = @import("std");
+const emitter = @import("emitter.zig");
+const semantic_analysis = @import("semantic_analysis.zig");
 
 pub const Expr = union(enum) {
     integer: i64,
@@ -29,6 +31,9 @@ pub const Expr = union(enum) {
             .fn_expr => |fn_e| {
                 allocator.free(fn_e.params);
                 fn_e.body.deinit(allocator);
+                if (fn_e.scope) |scope| {
+                    scope.deinit();
+                }
                 allocator.destroy(fn_e);
             },
             .call => |c| {
@@ -106,6 +111,7 @@ pub const IfExpr = struct {
 pub const FnExpr = struct {
     params: [][]const u8, // parameter names
     body: Expr,
+    scope: ?*semantic_analysis.Scope,
 };
 
 pub const CallExpr = struct {
@@ -145,10 +151,14 @@ pub const Statement = union(enum) {
 
 pub const Ast = struct {
     statements: []Statement,
+    scope: ?*semantic_analysis.Scope,
 
     pub fn deinit(self: *const Ast, allocator: std.mem.Allocator) void {
         for (self.statements) |stmt| {
             stmt.deinit(allocator);
+        }
+        if (self.scope) |scope| {
+            scope.deinit();
         }
         allocator.free(self.statements);
     }
@@ -180,7 +190,7 @@ test "ast printer formats simple expressions" {
         },
     };
 
-    const ast = Ast{ .statements = statements };
+    const ast = Ast{ .statements = statements, .scope = null };
     defer ast.deinit(allocator);
 
     var buffer: [256]u8 = undefined;
@@ -208,7 +218,7 @@ test "ast printer formats if expressions" {
         .debug = Expr{ .if_expr = if_expr },
     };
 
-    const ast = Ast{ .statements = statements };
+    const ast = Ast{ .statements = statements, .scope = null };
     defer ast.deinit(allocator);
 
     var buffer: [256]u8 = undefined;

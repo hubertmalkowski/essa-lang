@@ -79,8 +79,12 @@ pub const Disassembler = struct {
                 break :blk instructionLength("JMP_IF", .{ i.condition, i.offset });
             },
             .MAKE_CLOSURE => |i| blk: {
-                std.debug.print("MAKE_CLOSURE r{d} @{d} arity={d} captures={any}", .{ i.destination, i.addr, i.arity, i.captures });
-                break :blk 20; // Approximate length
+                std.debug.print("MAKE_CLOSURE r{d} {d} {d}", .{ i.destination, i.addr, i.arity });
+                break :blk instructionLength("MAKE_CLOSURE r", .{ i.destination, i.addr, i.arity }); // Approximate length
+            },
+            .CAPTURE_CLOSURE => |i| blk: {
+                std.debug.print("CAPTURE_CLOSURE r{d} {any}", .{ i.closure, i.captures });
+                break :blk 20;
             },
             .CALL => |i| blk: {
                 std.debug.print("CALL {d} {d}", .{ i.function_reg, i.param_reg });
@@ -168,7 +172,10 @@ pub const Disassembler = struct {
                 std.debug.print("if r{d} == true then jump to {d}", .{ i.condition, target });
             },
             .MAKE_CLOSURE => |i| {
-                std.debug.print("r{d} <- closure @{d} with {d} captures", .{ i.destination, i.addr, i.captures.len });
+                std.debug.print("r{d} <- closure @{d}", .{ i.destination, i.addr });
+            },
+            .CAPTURE_CLOSURE => {
+                // std.debug.print("", .{ });
             },
             .CALL => |i| {
                 std.debug.print("call r{d} with params starting at r{d}", .{ i.function_reg, i.param_reg });

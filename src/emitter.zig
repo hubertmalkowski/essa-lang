@@ -1,58 +1,64 @@
 const std = @import("std");
 const instruction = @import("instruction.zig");
+const semantic_analysis = @import("semantic_analysis.zig");
+const syntax = @import("ast.zig");
+
 const Parser = @import("parser.zig").Parser;
 const Value = @import("value.zig").Value;
 const Closure = @import("value.zig").Closure;
 const ValueTag = @import("value.zig").ValueTag;
 const Register = @import("instruction.zig").Register;
-const syntax = @import("ast.zig");
 
 const CompiledProgram = struct {
     bytecode: []instruction.Instruction,
     constants: []Value,
+
+    pub fn deinit(self: CompiledProgram, allocator: std.mem.Allocator) void {
+        for (self.bytecode) |code| {
+            if (code == instruction.InstructionTag.CAPTURE_CLOSURE) {
+                allocator.free(code.CAPTURE_CLOSURE.captures);
+            }
+        }
+        allocator.free(self.bytecode);
+        allocator.free(self.constants);
+    }
 };
 
 const CompilerError = error{UndefinedVariable};
-
-const Environment = struct {
-    parent: ?*Environment,
-    upvalues: std.ArrayList(Register),
-    next_register: u8,
-    locals: std.StringHashMap(Register),
-
-    fn init(parent: ?*Environment) Environment {
-        return Environment{ .parent = parent, .upvalues = std.ArrayList(Register).empty, .next_register = 0, .locals = std.StringHashMap(Register) };
-    }
-};
 
 pub const Emitter = struct {
     bytecode: std.ArrayList(instruction.Instruction),
     constants: std.ArrayList(Value),
     allocator: std.mem.Allocator,
 
-    // Track which register to allocate next
-    next_register: u8,
-
-    globals: std.StringHashMap(Register),
-    env: Environment,
+    current_scope: *semantic_analysis.Scope,
 
     pub fn init(allocator: std.mem.Allocator) Emitter {
         return .{
             .bytecode = std.ArrayList(instruction.Instruction).empty,
             .constants = std.ArrayList(Value).empty,
             .allocator = allocator,
-            .next_register = 0,
-            .globals = std.StringHashMap(Register).init(allocator),
+            .current_scope = undefined, // Will be set in emit()
         };
     }
 
     pub fn deinit(self: *Emitter) void {
+        for (self.bytecode.items) |code| {
+            if (code == instruction.InstructionTag.CAPTURE_CLOSURE) {
+                self.allocator.free(code.CAPTURE_CLOSURE.captures);
+            }
+        }
         self.bytecode.deinit(self.allocator);
         self.constants.deinit(self.allocator);
-        self.globals.deinit();
     }
 
-    pub fn emit(self: *Emitter, ast: syntax.Ast) !CompiledProgram {
+    pub fn emit(self: *Emitter, ast: *syntax.Ast) !CompiledProgram {
+        // Run semantic analysis first
+        try semantic_analysis.analyze(self.allocator, ast);
+
+        // Set up the root scope
+        self.current_scope = ast.scope orelse return error.MissingScope;
+
         // Emit each statement
         for (ast.statements) |stmt| {
             try self.emitStatement(stmt);
@@ -75,8 +81,24 @@ pub const Emitter = struct {
     }
 
     fn emitDefinition(self: *Emitter, def: syntax.Definition) !void {
-        const reg = try self.emitExpr(def.value);
-        try self.globals.put(def.name, reg);
+        // Get the pre-assigned register for this variable from the Binder
+        const var_reg = self.current_scope.variables.get(def.name) orelse return error.UndefinedVariable;
+        const dest_reg = var_reg.register_index;
+
+        // Emit the expression - it will use temporary registers
+        const value_reg = try self.emitExpr(def.value);
+
+        // Move the result to the variable's register if needed
+        if (value_reg != dest_reg) {
+            var last_emit = self.bytecode.items[self.bytecode.items.len - 1];
+            if (last_emit == instruction.InstructionTag.CAPTURE_CLOSURE) {
+                self.bytecode.items[self.bytecode.items.len - 1] = instruction.Instruction{ .MOVE = .{ .destination = dest_reg, .source = value_reg } };
+                last_emit.CAPTURE_CLOSURE.closure = dest_reg;
+                try self.emitChunk(last_emit);
+            } else {
+                try self.emitChunk(instruction.Instruction{ .MOVE = .{ .destination = dest_reg, .source = value_reg } });
+            }
+        }
     }
 
     fn emitDebug(self: *Emitter, expr: syntax.Expr) !void {
@@ -97,30 +119,72 @@ pub const Emitter = struct {
         };
     }
 
-    // Initial plan for functions and upvalues
-    // let add = fn x y => x + y
-    // adds this badboy to constants (Closure{fn_addr: 68, arity: 2})
-    // emit this for add
-    // MAKE_CLOSURE r1 0 [] ; Load function into r1, with
-    //
-    //
     fn emitFn(self: *Emitter, expr: *syntax.FnExpr) anyerror!Register {
+        // Allocate register for the closure in the parent scope
+        const fnReg = self.allocReg();
+
+        // Save the parent scope
+        const parent_scope = self.current_scope;
+
+        // Enter the function's scope
+        const fn_scope = expr.scope orelse return error.MissingScope;
+        self.current_scope = fn_scope;
+
+        // Jump over the function body
         try self.emitChunk(.{ .JMP = 0 });
         const fn_addr = self.bytecode.items.len;
+
+        // Emit the function body
         const ret_reg = try self.emitExpr(expr.body);
         try self.emitChunk(.{ .RETURN = ret_reg });
+
+        // Patch the jump to skip the function body
         self.bytecode.items[fn_addr - 1].JMP = calcOffset(fn_addr, self.bytecode.items.len + 1);
-        const closure = try self.allocator.create(Closure);
-        closure.* = Closure{ .addr = fn_addr, .arity = expr.params.len };
-        const const_idx = try self.addConstant(Value{ .closure = closure });
-        const fnReg = self.allocReg();
-        try self.emitChunk(instruction.Instruction{ .LOADK = .{ .const_idx = const_idx, .register = fnReg } });
+
+        // Emit MAKE_CLOSURE instruction
+        try self.emitChunk(instruction.Instruction{ .MAKE_CLOSURE = .{
+            .destination = fnReg,
+            .addr = fn_addr,
+            .arity = @intCast(expr.params.len),
+        } });
+
+        // Build the captures array from the function's scope
+        // We need the register in the FUNCTION scope, not the parent scope
+        // const capture_regs = try self.allocator.alloc(Register, fn_scope.captures.items.len);
+        var capture_regs = std.ArrayList(Register).empty;
+        defer capture_regs.deinit(self.allocator);
+        for (fn_scope.captures.items) |capture| {
+            // Look up the captured variable in the function's scope to get its register
+            // capture_regs[i] = capture.source_reg;
+
+            try capture_regs.append(self.allocator, capture.source_reg);
+        }
+
+        try self.emitChunk(instruction.Instruction{ .CAPTURE_CLOSURE = .{ .closure = fnReg, .captures = try capture_regs.toOwnedSlice(self.allocator) } });
+
+        // Restore the parent scope
+        self.current_scope = parent_scope;
+
         return fnReg;
     }
 
     fn emitCall(self: *Emitter, expr: *syntax.CallExpr) anyerror!Register {
         const function = try self.emitIdentifier(expr.function.identifier);
-        try self.emitChunk(instruction.Instruction{ .CALL = .{ .function_reg = function } });
+
+        // Emit all arguments and get the first argument's register
+        // (assuming args are in consecutive registers starting from first arg)
+        var param_reg: Register = 0;
+        if (expr.args.len > 0) {
+            param_reg = try self.emitExpr(expr.args[0]);
+            for (expr.args[1..]) |arg| {
+                _ = try self.emitExpr(arg);
+            }
+        }
+
+        try self.emitChunk(instruction.Instruction{ .CALL = .{
+            .function_reg = function,
+            .param_reg = param_reg,
+        } });
         return 0;
     }
 
@@ -173,8 +237,9 @@ pub const Emitter = struct {
     }
 
     fn emitIdentifier(self: *Emitter, ident: []const u8) !Register {
-        if (self.globals.get(ident)) |val| {
-            return val;
+        // Look up the variable in the current scope
+        if (self.current_scope.variables.get(ident)) |var_info| {
+            return var_info.register_index;
         }
         return CompilerError.UndefinedVariable;
     }
@@ -230,8 +295,9 @@ pub const Emitter = struct {
     }
 
     fn allocReg(self: *Emitter) Register {
-        const reg = self.next_register;
-        self.next_register += 1;
+        // Allocate from the current scope's register pool
+        const reg = self.current_scope.next_register;
+        self.current_scope.next_register += 1;
         return reg;
     }
 };
@@ -240,12 +306,12 @@ test "emit simple addition" {
     const source = "let result = 1 + 2";
 
     var parser = Parser.init(std.testing.allocator, source);
-    const ast = try parser.parse();
+    var ast = try parser.parse();
     defer ast.deinit(std.testing.allocator);
 
     var emitter = Emitter.init(std.testing.allocator);
     defer emitter.deinit();
-    const program = try emitter.emit(ast);
+    const program = try emitter.emit(&ast);
     defer {
         std.testing.allocator.free(program.bytecode);
         std.testing.allocator.free(program.constants);
@@ -284,12 +350,12 @@ test "emit subtraction" {
     const source = "let result = 10 - 3";
 
     var parser = Parser.init(std.testing.allocator, source);
-    const ast = try parser.parse();
+    var ast = try parser.parse();
     defer ast.deinit(std.testing.allocator);
 
     var emitter = Emitter.init(std.testing.allocator);
     defer emitter.deinit();
-    const program = try emitter.emit(ast);
+    const program = try emitter.emit(&ast);
     defer {
         std.testing.allocator.free(program.bytecode);
         std.testing.allocator.free(program.constants);
@@ -305,12 +371,12 @@ test "emit multiplication" {
     const source = "let result = 4 * 5";
 
     var parser = Parser.init(std.testing.allocator, source);
-    const ast = try parser.parse();
+    var ast = try parser.parse();
     defer ast.deinit(std.testing.allocator);
 
     var emitter = Emitter.init(std.testing.allocator);
     defer emitter.deinit();
-    const program = try emitter.emit(ast);
+    const program = try emitter.emit(&ast);
     defer {
         std.testing.allocator.free(program.bytecode);
         std.testing.allocator.free(program.constants);
@@ -323,12 +389,12 @@ test "emit division" {
     const source = "let result = 20 / 4";
 
     var parser = Parser.init(std.testing.allocator, source);
-    const ast = try parser.parse();
+    var ast = try parser.parse();
     defer ast.deinit(std.testing.allocator);
 
     var emitter = Emitter.init(std.testing.allocator);
     defer emitter.deinit();
-    const program = try emitter.emit(ast);
+    const program = try emitter.emit(&ast);
     defer {
         std.testing.allocator.free(program.bytecode);
         std.testing.allocator.free(program.constants);
@@ -341,12 +407,12 @@ test "emit operator precedence" {
     const source = "let result = 2 + 3 * 4";
 
     var parser = Parser.init(std.testing.allocator, source);
-    const ast = try parser.parse();
+    var ast = try parser.parse();
     defer ast.deinit(std.testing.allocator);
 
     var emitter = Emitter.init(std.testing.allocator);
     defer emitter.deinit();
-    const program = try emitter.emit(ast);
+    const program = try emitter.emit(&ast);
     defer {
         std.testing.allocator.free(program.bytecode);
         std.testing.allocator.free(program.constants);
@@ -369,12 +435,12 @@ test "emit comparison equal" {
     const source = "let result = 5 == 5";
 
     var parser = Parser.init(std.testing.allocator, source);
-    const ast = try parser.parse();
+    var ast = try parser.parse();
     defer ast.deinit(std.testing.allocator);
 
     var emitter = Emitter.init(std.testing.allocator);
     defer emitter.deinit();
-    const program = try emitter.emit(ast);
+    const program = try emitter.emit(&ast);
     defer {
         std.testing.allocator.free(program.bytecode);
         std.testing.allocator.free(program.constants);
@@ -387,12 +453,12 @@ test "emit comparison less than" {
     const source = "let result = 3 < 5";
 
     var parser = Parser.init(std.testing.allocator, source);
-    const ast = try parser.parse();
+    var ast = try parser.parse();
     defer ast.deinit(std.testing.allocator);
 
     var emitter = Emitter.init(std.testing.allocator);
     defer emitter.deinit();
-    const program = try emitter.emit(ast);
+    const program = try emitter.emit(&ast);
     defer {
         std.testing.allocator.free(program.bytecode);
         std.testing.allocator.free(program.constants);
@@ -405,12 +471,12 @@ test "emit comparison greater than" {
     const source = "let result = 10 > 5";
 
     var parser = Parser.init(std.testing.allocator, source);
-    const ast = try parser.parse();
+    var ast = try parser.parse();
     defer ast.deinit(std.testing.allocator);
 
     var emitter = Emitter.init(std.testing.allocator);
     defer emitter.deinit();
-    const program = try emitter.emit(ast);
+    const program = try emitter.emit(&ast);
     defer {
         std.testing.allocator.free(program.bytecode);
         std.testing.allocator.free(program.constants);
@@ -423,12 +489,12 @@ test "emit constant deduplication" {
     const source = "let result = 5 + 5";
 
     var parser = Parser.init(std.testing.allocator, source);
-    const ast = try parser.parse();
+    var ast = try parser.parse();
     defer ast.deinit(std.testing.allocator);
 
     var emitter = Emitter.init(std.testing.allocator);
     defer emitter.deinit();
-    const program = try emitter.emit(ast);
+    const program = try emitter.emit(&ast);
     defer {
         std.testing.allocator.free(program.bytecode);
         std.testing.allocator.free(program.constants);
@@ -449,12 +515,12 @@ test "emit variable reference" {
     ;
 
     var parser = Parser.init(std.testing.allocator, source);
-    const ast = try parser.parse();
+    var ast = try parser.parse();
     defer ast.deinit(std.testing.allocator);
 
     var emitter = Emitter.init(std.testing.allocator);
     defer emitter.deinit();
-    const program = try emitter.emit(ast);
+    const program = try emitter.emit(&ast);
     defer {
         std.testing.allocator.free(program.bytecode);
         std.testing.allocator.free(program.constants);
@@ -469,12 +535,12 @@ test "emit debug statement" {
     const source = "debug 42";
 
     var parser = Parser.init(std.testing.allocator, source);
-    const ast = try parser.parse();
+    var ast = try parser.parse();
     defer ast.deinit(std.testing.allocator);
 
     var emitter = Emitter.init(std.testing.allocator);
     defer emitter.deinit();
-    const program = try emitter.emit(ast);
+    const program = try emitter.emit(&ast);
     defer {
         std.testing.allocator.free(program.bytecode);
         std.testing.allocator.free(program.constants);
@@ -504,12 +570,12 @@ test "emit debug with expression" {
     const source = "debug 2 + 3";
 
     var parser = Parser.init(std.testing.allocator, source);
-    const ast = try parser.parse();
+    var ast = try parser.parse();
     defer ast.deinit(std.testing.allocator);
 
     var emitter = Emitter.init(std.testing.allocator);
     defer emitter.deinit();
-    const program = try emitter.emit(ast);
+    const program = try emitter.emit(&ast);
     defer {
         std.testing.allocator.free(program.bytecode);
         std.testing.allocator.free(program.constants);
@@ -537,12 +603,12 @@ test "emit debug with variable" {
     ;
 
     var parser = Parser.init(std.testing.allocator, source);
-    const ast = try parser.parse();
+    var ast = try parser.parse();
     defer ast.deinit(std.testing.allocator);
 
     var emitter = Emitter.init(std.testing.allocator);
     defer emitter.deinit();
-    const program = try emitter.emit(ast);
+    const program = try emitter.emit(&ast);
     defer {
         std.testing.allocator.free(program.bytecode);
         std.testing.allocator.free(program.constants);
@@ -565,12 +631,12 @@ test "emit if expression with true condition" {
     const source = "let result = if true then 1 else 0";
 
     var parser = Parser.init(std.testing.allocator, source);
-    const ast = try parser.parse();
+    var ast = try parser.parse();
     defer ast.deinit(std.testing.allocator);
 
     var emitter = Emitter.init(std.testing.allocator);
     defer emitter.deinit();
-    const program = try emitter.emit(ast);
+    const program = try emitter.emit(&ast);
     defer {
         std.testing.allocator.free(program.bytecode);
         std.testing.allocator.free(program.constants);
@@ -609,11 +675,11 @@ test "emit if expression with comparison" {
     const source = "let result = if 5 > 3 then 10 else 20";
 
     var parser = Parser.init(std.testing.allocator, source);
-    const ast = try parser.parse();
+    var ast = try parser.parse();
     defer ast.deinit(std.testing.allocator);
 
     var emitter = Emitter.init(std.testing.allocator);
-    const program = try emitter.emit(ast);
+    const program = try emitter.emit(&ast);
     defer emitter.deinit();
     defer {
         std.testing.allocator.free(program.bytecode);
@@ -640,12 +706,12 @@ test "emit nested if expression" {
     const source = "let result = if true then (if false then 1 else 2) else 3";
 
     var parser = Parser.init(std.testing.allocator, source);
-    const ast = try parser.parse();
+    var ast = try parser.parse();
     defer ast.deinit(std.testing.allocator);
 
     var emitter = Emitter.init(std.testing.allocator);
     defer emitter.deinit();
-    const program = try emitter.emit(ast);
+    const program = try emitter.emit(&ast);
     defer {
         std.testing.allocator.free(program.bytecode);
         std.testing.allocator.free(program.constants);
@@ -667,12 +733,12 @@ test "emit if with arithmetic in branches" {
     const source = "let result = if true then 1 + 2 else 3 * 4";
 
     var parser = Parser.init(std.testing.allocator, source);
-    const ast = try parser.parse();
+    var ast = try parser.parse();
     defer ast.deinit(std.testing.allocator);
 
     var emitter = Emitter.init(std.testing.allocator);
     defer emitter.deinit();
-    const program = try emitter.emit(ast);
+    const program = try emitter.emit(&ast);
     defer {
         std.testing.allocator.free(program.bytecode);
         std.testing.allocator.free(program.constants);
@@ -700,12 +766,12 @@ test "emit if jump offsets are valid" {
     const source = "let result = if true then 1 else 0";
 
     var parser = Parser.init(std.testing.allocator, source);
-    const ast = try parser.parse();
+    var ast = try parser.parse();
     defer ast.deinit(std.testing.allocator);
 
     var emitter = Emitter.init(std.testing.allocator);
     defer emitter.deinit();
-    const program = try emitter.emit(ast);
+    const program = try emitter.emit(&ast);
     defer {
         std.testing.allocator.free(program.bytecode);
         std.testing.allocator.free(program.constants);

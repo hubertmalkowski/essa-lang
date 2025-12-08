@@ -45,7 +45,7 @@ pub fn main() !void {
     defer allocator.free(source);
 
     var parser = Parser.init(allocator, source);
-    const ast = parser.parse() catch |err| {
+    var ast = parser.parse() catch |err| {
         std.debug.print("Parse error: {}\n", .{err});
         std.process.exit(1);
     };
@@ -56,14 +56,11 @@ pub fn main() !void {
 
     var emitter = Emitter.init(allocator);
     defer emitter.deinit();
-    const program = emitter.emit(ast) catch |err| {
+    const program = emitter.emit(&ast) catch |err| {
         std.debug.print("Compile error: {}\n", .{err});
         std.process.exit(1);
     };
-    defer {
-        allocator.free(program.bytecode);
-        allocator.free(program.constants);
-    }
+    defer program.deinit(allocator);
 
     // Show disassembly if requested
     if (show_disassembly) {

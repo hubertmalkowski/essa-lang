@@ -8,7 +8,7 @@ pub const GCSweep = struct {
     limit: usize,
 
     pub fn init() GCSweep {
-        return .{ .head = null, .current_memory = 0, .limit = 10 };
+        return .{ .head = null, .current_memory = 0, .limit = 50 };
     }
 
     pub fn allocObject(self: *GCSweep, allocator: std.mem.Allocator, frames: []const vm.CallFrame, comptime T: type) !*T {
@@ -41,8 +41,9 @@ pub const GCSweep = struct {
     pub fn sweep(self: *GCSweep, allocator: std.mem.Allocator) void {
         var next = self.head;
         var prev: ?*value.Object = null;
-        self.limit = self.current_memory * 2;
-        // var counter: u64 = 0;
+        self.limit = self.current_memory + self.limit * 2;
+        // std.debug.print("New limit: {d}\n", .{self.limit});
+        var counter: u64 = 0;
 
         while (next) |obj| {
             if (obj.marked) {
@@ -58,11 +59,11 @@ pub const GCSweep = struct {
                     self.head = next;
                 }
                 self.delete(allocator, obj);
-                // counter += 1;
+                counter += 1;
             }
         }
 
-        // std.debug.print("Objects sweeped: {d}\n", .{counter});
+        // std.debug.print("Swept {d} objects\n\n", .{counter});
     }
 
     fn delete(self: *GCSweep, allocator: std.mem.Allocator, obj: *value.Object) void {

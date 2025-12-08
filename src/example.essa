@@ -1,5 +1,6 @@
-let a = fn b d => 
-	if b > d then 
-		b 
-	else (a (b + 1) d)
-debug (a 2 3)
+let factorial = fn x => if x < 1 then 1 else x * (factorial (x - 1))
+let runFn = fn x => x 10
+let result = runFn factorial
+
+debug result
+

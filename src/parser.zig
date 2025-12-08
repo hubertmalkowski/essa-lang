@@ -25,9 +25,7 @@ pub const Parser = struct {
             try statements.append(self.allocator, stmt);
         }
 
-        return .{
-            .statements = try statements.toOwnedSlice(self.allocator),
-        };
+        return .{ .statements = try statements.toOwnedSlice(self.allocator), .scope = null };
     }
 
     // <statement> ::= <definition> | <debug>
@@ -110,7 +108,7 @@ pub const Parser = struct {
         const expr = try self.expression();
 
         const fn_expr = try self.allocator.create(ast.FnExpr);
-        fn_expr.* = ast.FnExpr{ .params = try params.toOwnedSlice(self.allocator), .body = expr };
+        fn_expr.* = ast.FnExpr{ .params = try params.toOwnedSlice(self.allocator), .body = expr, .scope = null };
 
         return ast.Expr{ .fn_expr = fn_expr };
     }
