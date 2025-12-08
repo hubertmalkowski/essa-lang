@@ -69,17 +69,18 @@ pub const Scope = struct {
             };
             std.mem.sort(@TypeOf(entries.items[0]), entries.items, {}, SortContext.lessThan);
 
-            var insertion_reg: ?Register = null;
+            var insertion_reg: Register = 0;
+
             for (entries.items) |*entry| {
                 if (!entry.info.is_captured) {
-                    if (insertion_reg == null) {
+                    if (insertion_reg == 0) {
                         insertion_reg = entry.info.register_index;
                     }
                     entry.info.register_index += 1;
                     try self.variables.put(entry.name, entry.info);
                 }
             }
-            const reg = insertion_reg orelse return error.UndefinedVariable;
+            const reg = insertion_reg;
             try self.variables.put(name, VariableInfo{ .is_captured = true, .kind = .Local, .register_index = reg });
             self.next_register += 1;
 
