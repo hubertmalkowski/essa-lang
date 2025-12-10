@@ -58,12 +58,14 @@ pub const Parser = struct {
 
     // <expression> ::= <if-expr>
     //                | <fn-expr>
+    //                | <def-expr>
     //                | <binary-expr>
     fn expression(self: *Parser) anyerror!ast.Expr {
         const next_tok = self.tokenizer.peekToken();
         return switch (next_tok.tag) {
             .IF => try self.ifExpr(),
             .FN => try self.fnExpr(),
+            .LET => try self.definitionExpression(),
             else => try self.binaryExpr(),
         };
     }
@@ -111,6 +113,21 @@ pub const Parser = struct {
         fn_expr.* = ast.FnExpr{ .params = try params.toOwnedSlice(self.allocator), .body = expr, .scope = null };
 
         return ast.Expr{ .fn_expr = fn_expr };
+    }
+
+    // <def-expr> ::= "let" <identifier> "=" <expression> in <expression>
+    pub fn definitionExpression(self: *Parser) !ast.Expr {
+        _ = try self.expect(.LET);
+        const name_tok = try self.expect(.IDENT);
+        const name = name_tok.lexeme(self.source);
+        _ = try self.expect(.EQUAL);
+        const body = try self.expression();
+        _ = try self.expect(.IN);
+        const tail = try self.expression();
+
+        const def_exp = try self.allocator.create(ast.DefExpr);
+        def_exp.* = ast.DefExpr{ .body = body, .expr = tail, .name = name };
+        return ast.Expr{ .def_expr = def_exp };
     }
 
     fn binaryExpr(self: *Parser) !ast.Expr {
@@ -182,10 +199,15 @@ pub const Parser = struct {
 
         while (true) {
             const op_tag = self.tokenizer.peekToken().tag;
-            if (op_tag != .ASTERISK and op_tag != .SLASH) break;
+            if (op_tag != .ASTERISK and op_tag != .SLASH and op_tag != .MODULO) break;
 
             const op_token = self.tokenizer.next();
-            const op: ast.BinaryOp = if (op_token.tag == .ASTERISK) .Mul else .Div;
+            const op: ast.BinaryOp = switch (op_token.tag) {
+                .ASTERISK => .Mul,
+                .SLASH => .Div,
+                .MODULO => .Mod,
+                else => .Mul,
+            };
 
             const right = try self.callExpr();
 
@@ -653,4 +675,16 @@ test "parse function call with unit argument" {
     try std.testing.expectEqualStrings("f", call.function.identifier);
     try std.testing.expectEqual(@as(usize, 1), call.args.len);
     try std.testing.expect(call.args[0] == .unit);
+}
+
+test "parse definition expression" {
+    const source = "debug (let name = 5 in name + 2)";
+    var parser = Parser.init(std.testing.allocator, source);
+    const program = try parser.parse();
+    defer program.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), program.statements.len);
+    try std.testing.expect(program.statements[0] == .debug);
+    try std.testing.expect(program.statements[0].debug == .def_expr);
+    try std.testing.expect(program.statements[0].debug.def_expr.expr.binary.op == .Add);
 }

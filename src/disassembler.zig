@@ -58,6 +58,10 @@ pub const Disassembler = struct {
                 std.debug.print("DIV {d} {d} {d}", .{ i.destination, i.a, i.b });
                 break :blk instructionLength("DIV", .{ i.destination, i.a, i.b });
             },
+            .MOD => |i| blk: {
+                std.debug.print("MOD {d} {d} {d}", .{ i.destination, i.a, i.b });
+                break :blk instructionLength("MOD", .{ i.destination, i.a, i.b });
+            },
             .EQ => |i| blk: {
                 std.debug.print("EQ {d} {d} {d}", .{ i.destination, i.a, i.b });
                 break :blk instructionLength("EQ", .{ i.destination, i.a, i.b });
@@ -152,7 +156,10 @@ pub const Disassembler = struct {
                 std.debug.print("r{d} <- r{d} * r{d}", .{ i.destination, i.a, i.b });
             },
             .DIV => |i| {
-                std.debug.print("r{d} <- r{d} / r{d}", .{ i.destination, i.a, i.b });
+                std.debug.print("r{d} <- r{d} % r{d}", .{ i.destination, i.a, i.b });
+            },
+            .MOD => |i| {
+                std.debug.print("r{d} <- r{d} % r{d}", .{ i.destination, i.a, i.b });
             },
             .EQ => |i| {
                 std.debug.print("r{d} <- r{d} == r{d}", .{ i.destination, i.a, i.b });

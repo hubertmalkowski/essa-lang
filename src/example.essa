@@ -1,6 +1,0 @@
-let bruh = 2
-let old_bruh = fn => bruh 
-let bruh = 6
-
-debug (old_bruh ())
-debug bruh 

@@ -104,6 +104,7 @@ pub const VM = struct {
             .SUB => |value| self.sub(value),
             .MUL => |value| self.mul(value),
             .DIV => |value| self.div(value),
+            .MOD => |value| self.mod(value),
 
             .GT => |value| self.gt(value),
             .EQ => |value| self.eq(value),
@@ -217,6 +218,21 @@ pub const VM = struct {
         }
 
         self.set_register(instruction.destination, Value{ .int = @divFloor(a.int, b.int) });
+    }
+
+    fn mod(self: *VM, instruction: ArithmeticInstruction) VMError!void {
+        const a = self.get_register(instruction.a);
+        const b = self.get_register(instruction.b);
+
+        if (!a.isDigit() or !b.isDigit()) {
+            return VMError.TypeError;
+        }
+
+        if (b.int == 0) {
+            return VMError.DivisionError;
+        }
+
+        self.set_register(instruction.destination, Value{ .int = @mod(a.int, b.int) });
     }
 
     fn eq(self: *VM, instruction: ComparisonInstruction) VMError!void {

@@ -257,6 +257,7 @@ pub const Emitter = struct {
             .Sub => try self.emitChunk(instruction.Instruction{ .SUB = arith_op }),
             .Mul => try self.emitChunk(instruction.Instruction{ .MUL = arith_op }),
             .Div => try self.emitChunk(instruction.Instruction{ .DIV = arith_op }),
+            .Mod => try self.emitChunk(instruction.Instruction{ .MOD = arith_op }),
             .Eq => try self.emitChunk(instruction.Instruction{ .EQ = comp_op }),
             .Lt => try self.emitChunk(instruction.Instruction{ .LT = comp_op }),
             .Gt => try self.emitChunk(instruction.Instruction{ .GT = comp_op }),

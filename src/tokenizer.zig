@@ -3,7 +3,7 @@ const std = @import("std");
 pub const Token = struct {
     tag: Tag,
     loc: Loc,
-    pub const Tag = enum { LET, FN, IF, DEBUG, THEN, ELSE, TRUE, FALSE, PLUS, MINUS, ASTERISK, SLASH, EQUAL_EQUAL, EQUAL, LESS_THAN, GREATER_THAN, LPAREN, RPAREN, ARROW, INTEGER, IDENT, INVALID, EOF };
+    pub const Tag = enum { LET, IN, FN, IF, DEBUG, THEN, ELSE, TRUE, FALSE, PLUS, MINUS, ASTERISK, SLASH, MODULO, EQUAL_EQUAL, EQUAL, LESS_THAN, GREATER_THAN, LPAREN, RPAREN, ARROW, INTEGER, IDENT, INVALID, EOF };
     pub const Loc = struct {
         start: usize,
         end: usize,
@@ -32,6 +32,7 @@ pub const Tokenizer = struct {
             '-' => self.makeToken(.MINUS),
             '+' => self.makeToken(.PLUS),
             '*' => self.makeToken(.ASTERISK),
+            '%' => self.makeToken(.MODULO),
             '/' => self.makeToken(.SLASH),
             '=' => {
                 if (self.match('=')) {
@@ -133,6 +134,8 @@ pub const Tokenizer = struct {
         const lexeme = self.buffer[self.start..self.current];
         const tag: Token.Tag = if (std.mem.eql(u8, lexeme, "let"))
             .LET
+        else if (std.mem.eql(u8, lexeme, "in"))
+            .IN
         else if (std.mem.eql(u8, lexeme, "fn"))
             .FN
         else if (std.mem.eql(u8, lexeme, "if"))
@@ -392,7 +395,7 @@ test "skip various whitespace characters" {
 }
 
 test "tokenize multiple tokens with whitespace" {
-    var tokenizer = Tokenizer.init("let x = 42");
+    var tokenizer = Tokenizer.init("let x = 42 in");
 
     const let_token = tokenizer.next();
     try std.testing.expectEqual(Token.Tag.LET, let_token.tag);
@@ -405,6 +408,9 @@ test "tokenize multiple tokens with whitespace" {
 
     const num_token = tokenizer.next();
     try std.testing.expectEqual(Token.Tag.INTEGER, num_token.tag);
+
+    const in_token = tokenizer.next();
+    try std.testing.expectEqual(Token.Tag.IN, in_token.tag);
 
     const eof_token = tokenizer.next();
     try std.testing.expectEqual(Token.Tag.EOF, eof_token.tag);

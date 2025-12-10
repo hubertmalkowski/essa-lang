@@ -11,6 +11,7 @@ pub const Expr = union(enum) {
     if_expr: *IfExpr,
     fn_expr: *FnExpr,
     call: *CallExpr,
+    def_expr: *DefExpr,
 
     pub fn deinit(self: Expr, allocator: std.mem.Allocator) void {
         switch (self) {
@@ -35,6 +36,11 @@ pub const Expr = union(enum) {
                     scope.deinit();
                 }
                 allocator.destroy(fn_e);
+            },
+            .def_expr => |def_exp| {
+                def_exp.body.deinit(allocator);
+                def_exp.expr.deinit(allocator);
+                allocator.destroy(def_exp);
             },
             .call => |c| {
                 c.function.deinit(allocator);
@@ -81,6 +87,15 @@ pub const Expr = union(enum) {
                 try fn_e.body.format(writer);
                 try writer.writeAll(")");
             },
+            .def_expr => |def| {
+                try writer.writeAll("(let ");
+                try writer.writeAll(def.name);
+                try writer.writeAll(" = ");
+                try def.body.format(writer);
+                try writer.writeAll(" in ");
+                try def.expr.format(writer);
+                try writer.writeAll(")");
+            },
             .call => |c| {
                 try writer.writeAll("call(");
                 try c.function.format(writer);
@@ -100,7 +115,7 @@ pub const BinaryExpr = struct {
     right: Expr,
 };
 
-pub const BinaryOp = enum { Add, Sub, Mul, Div, Eq, Lt, Gt };
+pub const BinaryOp = enum { Add, Sub, Mul, Div, Eq, Lt, Gt, Mod };
 
 pub const IfExpr = struct {
     condition: Expr,
@@ -112,6 +127,14 @@ pub const FnExpr = struct {
     params: [][]const u8, // parameter names
     body: Expr,
     scope: ?*semantic_analysis.Scope,
+};
+
+pub const DefExpr = struct {
+    // Lookiang at the real code this would be
+    // let <name> = <body> in <expr>
+    name: []const u8,
+    body: Expr,
+    expr: Expr,
 };
 
 pub const CallExpr = struct {

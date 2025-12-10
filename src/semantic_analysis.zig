@@ -161,6 +161,7 @@ const Binder = struct {
             .identifier => |ident| _ = try self.current_scope.capture(ident),
             .call => |call| try self.analizeCall(call),
             .if_expr => |if_e| try self.anailizeIf(if_e),
+            .def_expr => |def_ex| try self.analizeDefExpr(def_ex),
             else => {},
         }
     }
@@ -183,6 +184,12 @@ const Binder = struct {
         if (scope.parent) |parent| {
             self.current_scope = parent;
         }
+    }
+
+    fn analizeDefExpr(self: *Binder, expr: *syntax.DefExpr) !void {
+        try self.current_scope.defineVariable(expr.name);
+        try self.analizeExpr(&expr.body);
+        try self.analizeExpr(&expr.expr);
     }
 
     fn anailizeIf(self: *Binder, expr: *syntax.IfExpr) !void {

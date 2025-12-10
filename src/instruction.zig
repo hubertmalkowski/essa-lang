@@ -10,6 +10,7 @@ pub const InstructionTag = enum {
     SUB,
     MUL,
     DIV,
+    MOD,
 
     //Comparison
     EQ, // equals
@@ -51,6 +52,7 @@ pub const Instruction = union(InstructionTag) {
     SUB: ArithmeticInstruction,
     MUL: ArithmeticInstruction,
     DIV: ArithmeticInstruction,
+    MOD: ArithmeticInstruction,
     EQ: ComparisonInstruction,
     LT: ComparisonInstruction,
     GT: ComparisonInstruction,
@@ -76,6 +78,7 @@ pub const Instruction = union(InstructionTag) {
             .SUB => |i| try writer.print("SUB {d} {d} {d}", .{ i.destination, i.a, i.b }),
             .MUL => |i| try writer.print("MUL {d} {d} {d}", .{ i.destination, i.a, i.b }),
             .DIV => |i| try writer.print("DIV {d} {d} {d}", .{ i.destination, i.a, i.b }),
+            .MOD => |i| try writer.print("MOD {d} {d} {d}", .{ i.destination, i.a, i.b }),
 
             .EQ => |i| try writer.print("EQ {d} {d} {d}", .{ i.destination, i.a, i.b }),
             .LT => |i| try writer.print("LT {d} {d} {d}", .{ i.destination, i.a, i.b }),
