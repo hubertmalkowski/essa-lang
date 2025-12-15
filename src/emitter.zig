@@ -54,7 +54,7 @@ pub const Emitter = struct {
 
     pub fn emit(self: *Emitter, ast: *syntax.Ast) !CompiledProgram {
         // Run semantic analysis first
-        try semantic_analysis.analyze(self.allocator, ast);
+        try semantic_analysis.analize(self.allocator, ast);
 
         // Set up the root scope
         self.current_scope = ast.scope orelse return error.MissingScope;
@@ -82,8 +82,7 @@ pub const Emitter = struct {
 
     fn emitDefinition(self: *Emitter, def: syntax.Definition) !void {
         // Get the pre-assigned register for this variable from the Binder
-        const var_reg = self.current_scope.variables.get(def.name) orelse return error.UndefinedVariable;
-        const dest_reg = var_reg.register_index;
+        const dest_reg = try self.current_scope.getRegister(def.name);
 
         // Emit the expression - it will use temporary registers
         const value_reg = try self.emitExpr(def.value);
@@ -114,9 +113,33 @@ pub const Emitter = struct {
             .binary => try self.emitBinaryExpr(expr.binary),
             .if_expr => try self.emitIf(expr.if_expr),
             .fn_expr => try self.emitFn(expr.fn_expr),
+            .def_expr => try self.emitDefExpr(expr.def_expr),
             .call => try self.emitCall(expr.call),
             else => 0,
         };
+    }
+
+    fn emitDefExpr(self: *Emitter, expr: *syntax.DefExpr) !Register {
+        const parent_scope = self.current_scope;
+        const scope = expr.scope orelse return error.MissingScope;
+        self.current_scope = scope;
+
+        const destReg = try self.current_scope.getRegister(expr.name);
+        const valueReg = try self.emitExpr(expr.body);
+        if (destReg != valueReg) {
+            var last_emit = self.bytecode.items[self.bytecode.items.len - 1];
+            if (last_emit == instruction.InstructionTag.CAPTURE_CLOSURE) {
+                self.bytecode.items[self.bytecode.items.len - 1] = instruction.Instruction{ .MOVE = .{ .destination = destReg, .source = valueReg } };
+                last_emit.CAPTURE_CLOSURE.closure = valueReg;
+                try self.emitChunk(last_emit);
+            } else {
+                try self.emitChunk(instruction.Instruction{ .MOVE = .{ .destination = destReg, .source = valueReg } });
+            }
+        }
+
+        const tailReg = try self.emitExpr(expr.expr);
+        self.current_scope = parent_scope;
+        return tailReg;
     }
 
     fn emitFn(self: *Emitter, expr: *syntax.FnExpr) anyerror!Register {
@@ -151,16 +174,17 @@ pub const Emitter = struct {
         // Build the captures array from the function's scope
         // We need the register in the FUNCTION scope, not the parent scope
         // const capture_regs = try self.allocator.alloc(Register, fn_scope.captures.items.len);
-        var capture_regs = std.ArrayList(Register).empty;
-        defer capture_regs.deinit(self.allocator);
-        for (fn_scope.captures.items) |capture| {
-            // Look up the captured variable in the function's scope to get its register
-            // capture_regs[i] = capture.source_reg;
+        // var capture_regs = std.ArrayList(Register).empty;
+        // defer capture_regs.deinit(self.allocator);
+        // for (fn_scope.captures.items) |capture| {
+        //     // Look up the captured variable in the function's scope to get its register
+        //     // capture_regs[i] = capture.source_reg;
+        //
+        //     try capture_regs.append(self.allocator, capture.source_reg);
+        // }
 
-            try capture_regs.append(self.allocator, capture.source_reg);
-        }
-
-        try self.emitChunk(instruction.Instruction{ .CAPTURE_CLOSURE = .{ .closure = fnReg, .captures = try capture_regs.toOwnedSlice(self.allocator) } });
+        const captures_copy = try self.allocator.dupe(Register, self.current_scope.capture_layout orelse return error.MissingCaptures);
+        try self.emitChunk(instruction.Instruction{ .CAPTURE_CLOSURE = .{ .closure = fnReg, .captures = captures_copy } });
 
         // Restore the parent scope
         self.current_scope = parent_scope;
@@ -171,13 +195,25 @@ pub const Emitter = struct {
     fn emitCall(self: *Emitter, expr: *syntax.CallExpr) anyerror!Register {
         const function = try self.emitIdentifier(expr.function.identifier);
 
-        // Emit all arguments and get the first argument's register
-        // (assuming args are in consecutive registers starting from first arg)
+        // We need to ensure arguments are in consecutive registers
         var param_reg: Register = 0;
         if (expr.args.len > 0) {
-            param_reg = try self.emitExpr(expr.args[0]);
-            for (expr.args[1..]) |arg| {
-                _ = try self.emitExpr(arg);
+            param_reg = self.allocReg();
+
+            for (expr.args, 0..) |arg, i| {
+                const arg_reg = try self.emitExpr(arg);
+                const target_reg = param_reg + @as(Register, @intCast(i));
+
+                if (arg_reg != target_reg) {
+                    try self.emitChunk(instruction.Instruction{ .MOVE = .{
+                        .destination = target_reg,
+                        .source = arg_reg,
+                    } });
+                }
+
+                while (self.current_scope.next_register <= target_reg) {
+                    _ = self.allocReg();
+                }
             }
         }
 
@@ -238,10 +274,7 @@ pub const Emitter = struct {
 
     fn emitIdentifier(self: *Emitter, ident: []const u8) !Register {
         // Look up the variable in the current scope
-        if (self.current_scope.variables.get(ident)) |var_info| {
-            return var_info.register_index;
-        }
-        return CompilerError.UndefinedVariable;
+        return self.current_scope.getRegister(ident);
     }
 
     fn emitBinaryExpr(self: *Emitter, expr: *syntax.BinaryExpr) !Register {

@@ -75,6 +75,9 @@ pub fn main() !void {
 
     vm.run() catch |err| {
         std.debug.print("Runtime error: {}\n", .{err});
+        if (vm.errorMessage) |message| {
+            std.debug.print("{s}\n", .{message});
+        }
         std.process.exit(1);
     };
 }

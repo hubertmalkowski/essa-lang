@@ -57,6 +57,8 @@ pub const VM = struct {
     frames: std.ArrayList(CallFrame),
     allocator: std.mem.Allocator,
     gc: gc.GCSweep,
+    errorMessage: ?[]const u8 = null,
+    error_ip: ?usize = null,
 
     pub fn init(allocator: std.mem.Allocator, bytecode: []const Instruction, constants: []const Value) !VM {
         var frames = std.ArrayList(CallFrame).empty;
@@ -177,7 +179,7 @@ pub const VM = struct {
         // std.debug.print("{f} + {f} \n", .{ a, b });
 
         if (!a.isDigit() or !b.isDigit()) {
-            return VMError.TypeError;
+            return self.typeError("ADD expects integers, got {f} and {f}", .{ a, b });
         }
 
         self.set_register(instruction.destination, Value{ .int = a.int + b.int });
@@ -188,7 +190,7 @@ pub const VM = struct {
         const b = self.get_register(instruction.b);
 
         if (!a.isDigit() or !b.isDigit()) {
-            return VMError.TypeError;
+            return self.typeError("SUB expects integers, got {f} and {f}", .{ a, b });
         }
 
         self.set_register(instruction.destination, Value{ .int = a.int - b.int });
@@ -199,7 +201,7 @@ pub const VM = struct {
         const b = self.get_register(instruction.b);
 
         if (!a.isDigit() or !b.isDigit()) {
-            return VMError.TypeError;
+            return self.typeError("MUL expects integers, got {f} and {f}", .{ a, b });
         }
 
         self.set_register(instruction.destination, Value{ .int = a.int * b.int });
@@ -210,7 +212,7 @@ pub const VM = struct {
         const b = self.get_register(instruction.b);
 
         if (!a.isDigit() or !b.isDigit()) {
-            return VMError.TypeError;
+            return self.typeError("MUL expects integers, got {f} and {f}", .{ a, b });
         }
 
         if (b.int == 0) {
@@ -340,6 +342,27 @@ pub const VM = struct {
             try captures.append(self.allocator, value);
         }
         reg.closure.*.captures = try captures.toOwnedSlice(self.allocator);
+    }
+
+    fn typeError(self: *VM, comptime message: []const u8, args: anytype) VMError {
+        self.setError(message, args);
+        return VMError.TypeError;
+    }
+
+    fn setError(self: *VM, comptime fmt: []const u8, args: anytype) void {
+        // Free previous error message if it exists
+        if (self.errorMessage) |msg| {
+            self.allocator.free(msg);
+        }
+
+        // Allocate and format the new error message
+        self.errorMessage = std.fmt.allocPrint(self.allocator, fmt, args) catch {
+            // Fallback if allocation fails
+            self.errorMessage = null;
+            return;
+        };
+
+        self.error_ip = self.ip;
     }
 };
 

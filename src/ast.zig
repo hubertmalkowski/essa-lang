@@ -40,6 +40,9 @@ pub const Expr = union(enum) {
             .def_expr => |def_exp| {
                 def_exp.body.deinit(allocator);
                 def_exp.expr.deinit(allocator);
+                if (def_exp.scope) |scope| {
+                    scope.deinit();
+                }
                 allocator.destroy(def_exp);
             },
             .call => |c| {
@@ -135,6 +138,7 @@ pub const DefExpr = struct {
     name: []const u8,
     body: Expr,
     expr: Expr,
+    scope: ?*semantic_analysis.Scope,
 };
 
 pub const CallExpr = struct {

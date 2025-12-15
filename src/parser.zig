@@ -126,7 +126,7 @@ pub const Parser = struct {
         const tail = try self.expression();
 
         const def_exp = try self.allocator.create(ast.DefExpr);
-        def_exp.* = ast.DefExpr{ .body = body, .expr = tail, .name = name };
+        def_exp.* = ast.DefExpr{ .body = body, .expr = tail, .name = name, .scope = null };
         return ast.Expr{ .def_expr = def_exp };
     }
 
