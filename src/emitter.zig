@@ -53,18 +53,14 @@ pub const Emitter = struct {
     }
 
     pub fn emit(self: *Emitter, ast: *syntax.Ast) !CompiledProgram {
-        // Run semantic analysis first
         try semantic_analysis.analize(self.allocator, ast);
 
-        // Set up the root scope
         self.current_scope = ast.scope orelse return error.MissingScope;
 
-        // Emit each statement
         for (ast.statements) |stmt| {
             try self.emitStatement(stmt);
         }
 
-        // Add HALT at end
         try self.emitChunk(.{ .HALT = {} });
 
         return CompiledProgram{
@@ -81,13 +77,10 @@ pub const Emitter = struct {
     }
 
     fn emitDefinition(self: *Emitter, def: syntax.Definition) !void {
-        // Get the pre-assigned register for this variable from the Binder
         const dest_reg = try self.current_scope.getRegister(def.name);
 
-        // Emit the expression - it will use temporary registers
         const value_reg = try self.emitExpr(def.value);
 
-        // Move the result to the variable's register if needed
         if (value_reg != dest_reg) {
             var last_emit = self.bytecode.items[self.bytecode.items.len - 1];
             if (last_emit == instruction.InstructionTag.CAPTURE_CLOSURE) {
@@ -143,45 +136,26 @@ pub const Emitter = struct {
     }
 
     fn emitFn(self: *Emitter, expr: *syntax.FnExpr) anyerror!Register {
-        // Allocate register for the closure in the parent scope
         const fnReg = self.allocReg();
 
-        // Save the parent scope
         const parent_scope = self.current_scope;
 
-        // Enter the function's scope
         const fn_scope = expr.scope orelse return error.MissingScope;
         self.current_scope = fn_scope;
 
-        // Jump over the function body
         try self.emitChunk(.{ .JMP = 0 });
         const fn_addr = self.bytecode.items.len;
 
-        // Emit the function body
         const ret_reg = try self.emitExpr(expr.body);
         try self.emitChunk(.{ .RETURN = ret_reg });
 
-        // Patch the jump to skip the function body
         self.bytecode.items[fn_addr - 1].JMP = calcOffset(fn_addr, self.bytecode.items.len + 1);
 
-        // Emit MAKE_CLOSURE instruction
         try self.emitChunk(instruction.Instruction{ .MAKE_CLOSURE = .{
             .destination = fnReg,
             .addr = fn_addr,
             .arity = @intCast(expr.params.len),
         } });
-
-        // Build the captures array from the function's scope
-        // We need the register in the FUNCTION scope, not the parent scope
-        // const capture_regs = try self.allocator.alloc(Register, fn_scope.captures.items.len);
-        // var capture_regs = std.ArrayList(Register).empty;
-        // defer capture_regs.deinit(self.allocator);
-        // for (fn_scope.captures.items) |capture| {
-        //     // Look up the captured variable in the function's scope to get its register
-        //     // capture_regs[i] = capture.source_reg;
-        //
-        //     try capture_regs.append(self.allocator, capture.source_reg);
-        // }
 
         const captures_copy = try self.allocator.dupe(Register, self.current_scope.capture_layout orelse return error.MissingCaptures);
         try self.emitChunk(instruction.Instruction{ .CAPTURE_CLOSURE = .{ .closure = fnReg, .captures = captures_copy } });
@@ -195,7 +169,6 @@ pub const Emitter = struct {
     fn emitCall(self: *Emitter, expr: *syntax.CallExpr) anyerror!Register {
         const function = try self.emitIdentifier(expr.function.identifier);
 
-        // We need to ensure arguments are in consecutive registers
         var param_reg: Register = 0;
         if (expr.args.len > 0) {
             param_reg = self.allocReg();
