@@ -244,7 +244,6 @@ const CaptureBuilder = struct {
         self.current_scope = scope;
         expr.scope = scope;
         for (expr.params) |param| {
-            std.debug.print("{s}\n", .{param});
             try self.current_scope.defineParam(param);
         }
         try self.analizeExpr(&expr.body);
