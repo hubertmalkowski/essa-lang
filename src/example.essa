@@ -7,4 +7,4 @@ let power = fn base exp =>
     in
     multiply exp 1
 
-debug (power 2 2)
+debug (power 2 8)

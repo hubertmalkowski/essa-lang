@@ -18,7 +18,7 @@ const CaptureInfo = struct {
 pub const Scope = struct {
     parent: ?*Scope,
     captures: std.StringHashMap(void),
-    variables: std.StringHashMap(VariableType),
+    variables: std.StringArrayHashMap(VariableType),
     allocator: std.mem.Allocator,
     type: union(enum) { closed, open },
     register_map: ?std.StringHashMap(Register) = null,
@@ -29,7 +29,7 @@ pub const Scope = struct {
         const scope = try allocator.create(Scope);
         scope.* = Scope{
             .parent = null,
-            .variables = std.StringHashMap(VariableType).init(allocator), //
+            .variables = std.StringArrayHashMap(VariableType).init(allocator), //
             .captures = std.StringHashMap(void).init(allocator),
             .type = .closed,
             .allocator = allocator,
@@ -49,6 +49,24 @@ pub const Scope = struct {
         }
 
         self.allocator.destroy(self);
+    }
+
+    pub fn format(self: *Scope, writer: *std.Io.Writer) !void {
+        if (self.register_map) |map| {
+            var iter = map.iterator();
+            try writer.print("Variables:\n", .{});
+            while (iter.next()) |reg| {
+                try writer.print("\t {s} - r{d}\n", .{ reg.key_ptr.*, reg.value_ptr.* });
+            }
+        }
+        if (self.capture_layout) |captures| {
+            try writer.print("Captures:", .{});
+            for (captures) |capt| {
+                try writer.print(" r{d},", .{capt});
+            }
+
+            try writer.print("\n", .{});
+        }
     }
 
     pub fn initClosed(parent: *Scope) !*Scope {
@@ -226,6 +244,7 @@ const CaptureBuilder = struct {
         self.current_scope = scope;
         expr.scope = scope;
         for (expr.params) |param| {
+            std.debug.print("{s}\n", .{param});
             try self.current_scope.defineParam(param);
         }
         try self.analizeExpr(&expr.body);
@@ -678,19 +697,19 @@ test "debug: power function register assignments and capture layout" {
     std.debug.print("\nPower function registers:\n", .{});
     std.debug.print("  base: r{?}\n", .{power_scope.register_map.?.get("base")});
     std.debug.print("  exp: r{?}\n", .{power_scope.register_map.?.get("exp")});
-    
+
     const def_scope = ast.statements[0].definition.value.fn_expr.body.def_expr.scope.?;
     std.debug.print("\nLet..in scope registers:\n", .{});
     std.debug.print("  multiply: r{?}\n", .{def_scope.register_map.?.get("multiply")});
     std.debug.print("  exp: r{?}\n", .{def_scope.register_map.?.get("exp")});
     std.debug.print("  base: r{?}\n", .{def_scope.register_map.?.get("base")});
-    
+
     const multiply_scope = ast.statements[0].definition.value.fn_expr.body.def_expr.body.fn_expr.scope.?;
     std.debug.print("\nMultiply function registers:\n", .{});
     std.debug.print("  multiply: r{?}\n", .{multiply_scope.register_map.?.get("multiply")});
     std.debug.print("  base: r{?}\n", .{multiply_scope.register_map.?.get("base")});
     std.debug.print("  times: r{?}\n", .{multiply_scope.register_map.?.get("times")});
     std.debug.print("  result: r{?}\n", .{multiply_scope.register_map.?.get("result")});
-    
+
     std.debug.print("\nCapture layout: {any}\n", .{multiply_scope.capture_layout});
 }
