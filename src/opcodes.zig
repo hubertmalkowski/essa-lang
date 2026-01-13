@@ -61,6 +61,10 @@ pub const OpCode = enum(u6) {
     LIST, // ABC
     HEAD, // ABC
     TAIL, // ABC
+    //
+    pub inline fn toU6(self: OpCode) u6 {
+        return @intFromEnum(self);
+    }
 };
 
 pub const Instruction = extern union {
