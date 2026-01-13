@@ -34,7 +34,6 @@ pub const OpCode = enum(u6) {
     SUB, // ABC
     MUL, // ABC
     DIV, // ABC
-    POW, // ABC
     UNM, // ABC
 
     // Logic

@@ -97,6 +97,9 @@ pub const VM = struct {
             .JMP => self.jmp(i.asbx),
             .ADD => self.add(i.abc),
             .SUB => self.sub(i.abc),
+            .MUL => self.mul(i.abc),
+            .DIV => self.div(i.abc),
+            .UNM => self.unm(i.abc),
             else => error.Unknown,
         };
     }
@@ -130,10 +133,43 @@ pub const VM = struct {
 
     fn sub(self: *VM, i: opcodes.ABC) !void {
         return self.binaryOp(i, struct {
-            fn func(a: anytype, b: anytype) @TypeOf(a + b) {
+            fn func(a: anytype, b: anytype) @TypeOf(a - b) {
                 return a - b;
             }
         }.func);
+    }
+
+    fn mul(self: *VM, i: opcodes.ABC) !void {
+        return self.binaryOp(i, struct {
+            fn func(a: anytype, b: anytype) @TypeOf(a * b) {
+                return a * b;
+            }
+        }.func);
+    }
+
+    fn div(self: *VM, i: opcodes.ABC) !void {
+        const frame = self.currentFrame();
+        const bval = frame.getRegOrConst(i.b, i.bk);
+        const cval = frame.getRegOrConst(i.c, i.ck);
+
+        if (!bval.isNumeric() or !cval.isNumeric()) return error.InvalidType;
+
+        const left = bval.asFloat();
+        const right = cval.asFloat();
+
+        frame.setReg(i.a, values.Value{ .float = left / right });
+    }
+
+    fn unm(self: *VM, i: opcodes.ABC) !void {
+        const frame = self.currentFrame();
+        const bval = frame.getReg(i.b);
+        if (!bval.isNumeric()) return error.InvalidType;
+
+        if (bval.isInt()) {
+            frame.setReg(i.a, .{ .integer = -bval.integer });
+        } else {
+            frame.setReg(i.a, .{ .float = -bval.float });
+        }
     }
 
     fn currentFrame(self: *VM) *CallFrame {
@@ -218,7 +254,7 @@ test "JMP changes the PC" {
         .loadk(0, 0) // 0 - bytecode start
         .loadk(1, 1)
         .loadk(2, 2)
-        .jmp(0, 3) // jumps twice
+        .jmp(3) // jumps thrice
         .move(0, 2, 0, false, false) // r0 <- r2
         .move(2, 1, 0, false, false) // r2 <- r1
         .move(1, 0, 0, false, false) // r1 <- r0 // jump here
@@ -239,11 +275,11 @@ test "JMP handles jumpbacks" {
         .addConst(.{ .integer = 5 })
         .addConst(.{ .integer = 2 })
         .loadk(0, 0) // 0 - bytecode start
-        .jmp(0, 2) // skip next
-        .jmp(0, 6) // jump to the last
+        .jmp(2) // skip next
+        .jmp(6) // jump to the last
         .loadk(1, 1)
         .loadk(2, 2)
-        .jmp(0, -3) // jump back to the .jmp(0, 6)
+        .jmp(-3) // jump back to the .jmp(0, 6)
         .move(0, 2, 0, false, false) // r0 <- r2
         .move(2, 1, 0, false, false) // r2 <- r1
         .move(1, 0, 0, false, false) // r1 <- r0 // jump here
@@ -337,13 +373,13 @@ test "SUB substracts 2 numbers" {
     var vm = try bytecode
         .addConst(.{ .integer = 5 })
         .addConst(.{ .integer = 2 })
-        .sub(2, 0, 1, true, true)
-        .build(3);
+        .sub(0, 0, 1, true, true)
+        .build(1);
 
     defer vm.deinit();
 
     try vm.run();
-    try std.testing.expectEqual(3, vm.callFrames.items[0].registers[2].integer);
+    try std.testing.expectEqual(3, vm.callFrames.items[0].registers[0].integer);
 }
 
 test "SUB substracts 2 numbers with negative numbers" {
@@ -352,13 +388,185 @@ test "SUB substracts 2 numbers with negative numbers" {
     var vm = try bytecode
         .addConst(.{ .integer = 5 })
         .addConst(.{ .integer = 2 })
-        .sub(2, 1, 0, true, true)
-        .build(3);
+        .sub(0, 1, 0, true, true)
+        .build(1);
 
     defer vm.deinit();
 
     try vm.run();
-    try std.testing.expectEqual(-3, vm.callFrames.items[0].registers[2].integer);
+    try std.testing.expectEqual(-3, vm.callFrames.items[0].registers[0].integer);
+}
+
+test "MUL multiplies 2 numbers" {
+    var bytecode = TestBytecodeBuilder.init(std.testing.allocator);
+    defer bytecode.deinit();
+    var vm = try bytecode
+        .addConst(.{ .integer = 5 })
+        .addConst(.{ .integer = 2 })
+        .mul(0, 0, 1, true, true)
+        .build(1);
+
+    defer vm.deinit();
+
+    try vm.run();
+    try std.testing.expectEqual(10, vm.callFrames.items[0].registers[0].integer);
+}
+
+test "MUL multiplies 2 floats" {
+    var bytecode = TestBytecodeBuilder.init(std.testing.allocator);
+    defer bytecode.deinit();
+    var vm = try bytecode
+        .addConst(.{ .float = 5.4 })
+        .addConst(.{ .float = 2.213 })
+        .mul(0, 0, 1, true, true)
+        .build(1);
+
+    defer vm.deinit();
+
+    try vm.run();
+    try std.testing.expectEqual(11.9502, vm.callFrames.items[0].registers[0].float);
+}
+
+test "DIV divides 2 ints and returns floats" {
+    var bytecode = TestBytecodeBuilder.init(std.testing.allocator);
+    defer bytecode.deinit();
+    var vm = try bytecode
+        .addConst(.{ .integer = 6 })
+        .addConst(.{ .integer = 3 })
+        .div(0, 0, 1, true, true)
+        .build(1);
+
+    defer vm.deinit();
+
+    try vm.run();
+    try std.testing.expectEqual(2, vm.callFrames.items[0].registers[0].float);
+}
+
+test "DIV divides int with a float and returns floats" {
+    var bytecode = TestBytecodeBuilder.init(std.testing.allocator);
+    defer bytecode.deinit();
+    var vm = try bytecode
+        .addConst(.{ .integer = 7 })
+        .addConst(.{ .float = 3.5 })
+        .div(0, 0, 1, true, true)
+        .build(1);
+
+    defer vm.deinit();
+
+    try vm.run();
+    try std.testing.expectEqual(2, vm.callFrames.items[0].registers[0].float);
+}
+
+test "DIV dividies something by 0 and returns inf/-inf" {
+    var bytecode = TestBytecodeBuilder.init(std.testing.allocator);
+    defer bytecode.deinit();
+    var vm = try bytecode
+        .addConst(.{ .integer = 7 })
+        .addConst(.{ .float = 0 })
+        .div(0, 0, 1, true, true)
+        .build(1);
+
+    defer vm.deinit();
+
+    try vm.run();
+    //     what to put here?
+    try std.testing.expectEqual(std.math.inf(f64), vm.callFrames.items[0].registers[0].float);
+}
+
+test "DIV dividies 0 by 0 and returns NaN" {
+    var bytecode = TestBytecodeBuilder.init(std.testing.allocator);
+    defer bytecode.deinit();
+    var vm = try bytecode
+        .addConst(.{ .integer = 0 })
+        .addConst(.{ .float = 0 })
+        .div(0, 0, 1, true, true)
+        .build(1);
+
+    defer vm.deinit();
+
+    try vm.run();
+    //     what to put here?
+    try std.testing.expect(std.math.isNan(vm.callFrames.items[0].registers[0].float));
+}
+
+test "UNM negates int" {
+    var bytecode = TestBytecodeBuilder.init(std.testing.allocator);
+    defer bytecode.deinit();
+    var vm = try bytecode
+        .addConst(.{ .integer = 1 })
+        .loadk(0, 0)
+        .unm(0, 0)
+        .build(1);
+
+    defer vm.deinit();
+
+    try vm.run();
+    //     what to put here?
+    try std.testing.expectEqual(-1, vm.currentFrame().registers[0].integer);
+}
+
+test "UNM negates float" {
+    var bytecode = TestBytecodeBuilder.init(std.testing.allocator);
+    defer bytecode.deinit();
+    var vm = try bytecode
+        .addConst(.{ .float = 1 })
+        .loadk(0, 0)
+        .unm(0, 0)
+        .build(1);
+
+    defer vm.deinit();
+
+    try vm.run();
+    //     what to put here?
+    try std.testing.expectEqual(-1, vm.currentFrame().registers[0].float);
+}
+
+test "UNM negates negative float" {
+    var bytecode = TestBytecodeBuilder.init(std.testing.allocator);
+    defer bytecode.deinit();
+    var vm = try bytecode
+        .addConst(.{ .float = -1 })
+        .loadk(0, 0)
+        .unm(0, 0)
+        .build(1);
+
+    defer vm.deinit();
+
+    try vm.run();
+    //     what to put here?
+    try std.testing.expectEqual(1, vm.currentFrame().registers[0].float);
+}
+
+test "UNM negates negative int " {
+    var bytecode = TestBytecodeBuilder.init(std.testing.allocator);
+    defer bytecode.deinit();
+    var vm = try bytecode
+        .addConst(.{ .integer = -1 })
+        .loadk(0, 0)
+        .unm(0, 0)
+        .build(1);
+
+    defer vm.deinit();
+
+    try vm.run();
+    //     what to put here?
+    try std.testing.expectEqual(1, vm.currentFrame().registers[0].integer);
+}
+
+test "UNM negates zero" {
+    var bytecode = TestBytecodeBuilder.init(std.testing.allocator);
+    defer bytecode.deinit();
+    var vm = try bytecode
+        .addConst(.{ .integer = 0 })
+        .loadk(0, 0)
+        .unm(0, 0)
+        .build(1);
+
+    defer vm.deinit();
+
+    try vm.run();
+    //     what to put here?
+    try std.testing.expectEqual(0, vm.currentFrame().registers[0].integer);
 }
 
 // A little helper to build bytecode
@@ -418,8 +626,8 @@ pub const TestBytecodeBuilder = struct {
         return self;
     }
 
-    pub fn jmp(self: *TestBytecodeBuilder, reg: u8, pc_delta: i16) *TestBytecodeBuilder {
-        self.appendInstr(.{ .asbx = .{ .tag = opcodes.OpCode.JMP.toU6(), .a = reg, .sbx = pc_delta } });
+    pub fn jmp(self: *TestBytecodeBuilder, pc_delta: i16) *TestBytecodeBuilder {
+        self.appendInstr(.{ .asbx = .{ .tag = opcodes.OpCode.JMP.toU6(), .a = 0, .sbx = pc_delta } });
         return self;
     }
 
@@ -430,6 +638,21 @@ pub const TestBytecodeBuilder = struct {
 
     pub fn sub(self: *TestBytecodeBuilder, a: u8, b: u8, c: u8, bk: bool, ck: bool) *TestBytecodeBuilder {
         self.appendInstr(.{ .abc = .{ .tag = opcodes.OpCode.SUB.toU6(), .a = a, .b = b, .c = c, .bk = bk, .ck = ck } });
+        return self;
+    }
+
+    pub fn mul(self: *TestBytecodeBuilder, a: u8, b: u8, c: u8, bk: bool, ck: bool) *TestBytecodeBuilder {
+        self.appendInstr(.{ .abc = .{ .tag = opcodes.OpCode.MUL.toU6(), .a = a, .b = b, .c = c, .bk = bk, .ck = ck } });
+        return self;
+    }
+
+    pub fn div(self: *TestBytecodeBuilder, a: u8, b: u8, c: u8, bk: bool, ck: bool) *TestBytecodeBuilder {
+        self.appendInstr(.{ .abc = .{ .tag = opcodes.OpCode.DIV.toU6(), .a = a, .b = b, .c = c, .bk = bk, .ck = ck } });
+        return self;
+    }
+
+    pub fn unm(self: *TestBytecodeBuilder, to: u8, from: u8) *TestBytecodeBuilder {
+        self.appendInstr(.{ .abc = .{ .tag = opcodes.OpCode.UNM.toU6(), .a = to, .b = from, .c = 0, .bk = false, .ck = false } });
         return self;
     }
 

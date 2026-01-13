@@ -41,7 +41,6 @@ ADD A B C            ; r(A) := rk(B) + rk(C)
 SUB A B C            ; r(A) := rk(B) - rk(C) 
 MUL A B C            ; r(A) := rk(B) * rk(C) 
 DIV A B C            ; r(A) := rk(B) / rk(C) 
-POW A B C            ; r(A) := rk(B) ^ rk(C) 
 MOD A B C            ; r(A) := rk(B) % rk(C)
 UNM A B              ; r(A) := -r(B) 
 
