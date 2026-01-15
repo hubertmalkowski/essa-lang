@@ -100,6 +100,12 @@ pub const VM = struct {
             .MUL => self.mul(i.abc),
             .DIV => self.div(i.abc),
             .UNM => self.unm(i.abc),
+            .NOT => self.not(i.abc),
+            .EQ => self.eq(i.abc),
+            .LT => self.lt(i.abc),
+            .LE => self.le(i.abc),
+            .TEST => self.tst(i.abc),
+            .ISNIL => self.isnil(i.abc),
             else => error.Unknown,
         };
     }
@@ -170,6 +176,74 @@ pub const VM = struct {
         } else {
             frame.setReg(i.a, .{ .float = -bval.float });
         }
+    }
+
+    fn not(self: *VM, i: opcodes.ABC) !void {
+        const frame = self.currentFrame();
+        const bval = frame.getReg(i.b);
+
+        if (bval.isBool()) {
+            frame.setReg(i.a, .{ .bool = !bval.bool });
+        } else {
+            return error.TypeError;
+        }
+    }
+
+    fn eq(self: *VM, i: opcodes.ABC) !void {
+        const frame = self.currentFrame();
+        const bval = frame.getRegOrConst(i.b, i.bk);
+        const cval = frame.getRegOrConst(i.c, i.ck);
+
+        if (cval.isBool() and bval.isBool()) {
+            frame.setReg(i.a, .{ .bool = bval.bool == cval.bool });
+        } else if (cval.isInt() and bval.isInt()) {
+            frame.setReg(i.a, .{ .bool = cval.integer == bval.integer });
+        } else if (cval.isNumeric() and bval.isNumeric()) {
+            frame.setReg(i.a, .{ .bool = cval.asFloat() == bval.asFloat() });
+        } else if (bval.isTuple() and cval.isTuple()) {
+            frame.setReg(i.a, .{ .bool = cval.tuple == bval.tuple });
+        } else if (bval.isNil() and cval.isNil()) {
+            frame.setReg(i.a, .{ .bool = true });
+        } else {
+            frame.setReg(i.a, .{ .bool = false });
+        }
+    }
+
+    fn lt(self: *VM, i: opcodes.ABC) !void {
+        const frame = self.currentFrame();
+        const bval = frame.getRegOrConst(i.b, i.bk);
+        const cval = frame.getRegOrConst(i.c, i.ck);
+        if (bval.isNumeric() and cval.isNumeric()) {
+            frame.setReg(i.a, .{ .bool = cval.asFloat() > bval.asFloat() });
+        } else {
+            return error.TypeError;
+        }
+    }
+
+    fn le(self: *VM, i: opcodes.ABC) !void {
+        const frame = self.currentFrame();
+        const bval = frame.getRegOrConst(i.b, i.bk);
+        const cval = frame.getRegOrConst(i.c, i.ck);
+        if (bval.isNumeric() and cval.isNumeric()) {
+            frame.setReg(i.a, .{ .bool = cval.asFloat() >= bval.asFloat() });
+        } else {
+            return error.TypeError;
+        }
+    }
+
+    // test (zig doesn't allo "test" as function name)
+    fn tst(self: *VM, i: opcodes.ABC) !void {
+        const frame = self.currentFrame();
+        const aval = frame.getReg(i.a);
+        if (aval.isBool() and aval.bool) {
+            frame.pc += 1;
+        }
+    }
+
+    fn isnil(self: *VM, i: opcodes.ABC) !void {
+        const frame = self.currentFrame();
+        const bval = frame.getReg(i.b);
+        frame.setReg(i.a, .{ .bool = bval.isNil() });
     }
 
     fn currentFrame(self: *VM) *CallFrame {
@@ -469,7 +543,6 @@ test "DIV dividies something by 0 and returns inf/-inf" {
     defer vm.deinit();
 
     try vm.run();
-    //     what to put here?
     try std.testing.expectEqual(std.math.inf(f64), vm.callFrames.items[0].registers[0].float);
 }
 
@@ -569,6 +642,229 @@ test "UNM negates zero" {
     try std.testing.expectEqual(0, vm.currentFrame().registers[0].integer);
 }
 
+test "NOT negates booleans" {
+    var bytecode = TestBytecodeBuilder.init(std.testing.allocator);
+    defer bytecode.deinit();
+    var vm = try bytecode
+        .addConst(.{ .bool = true })
+        .addConst(.{ .bool = false })
+        .loadk(0, 0)
+        .loadk(1, 1)
+        .not(0, 0) // r0 = !r0
+        .not(1, 1)
+        .build(2); // r1 = !r1
+
+    defer vm.deinit();
+
+    try vm.run();
+    try std.testing.expectEqual(false, vm.currentFrame().registers[0].bool);
+    try std.testing.expectEqual(true, vm.currentFrame().registers[1].bool);
+}
+
+test "NOT results in type error if not logic value" {
+    var bytecode = TestBytecodeBuilder.init(std.testing.allocator);
+    defer bytecode.deinit();
+    var vm = try bytecode
+        .addConst(.{ .integer = 0 })
+        .loadk(0, 0)
+        .not(0, 0) // r0 = !r0
+        .build(1);
+    defer vm.deinit();
+    try std.testing.expectError(error.TypeError, vm.run());
+}
+
+test "EQ compares 2 bools" {
+    var bytecode = TestBytecodeBuilder.init(std.testing.allocator);
+    defer bytecode.deinit();
+    var vm = try bytecode
+        .addConst(.{ .bool = true })
+        .addConst(.{ .bool = false })
+        .eq(0, 1, 0, true, true)
+        .build(1);
+
+    defer vm.deinit();
+
+    try vm.run();
+    try std.testing.expectEqual(false, vm.currentFrame().registers[0].bool);
+}
+
+test "EQ compares 2 integers" {
+    var bytecode = TestBytecodeBuilder.init(std.testing.allocator);
+    defer bytecode.deinit();
+    var vm = try bytecode
+        .addConst(.{ .integer = 2 })
+        .eq(0, 0, 0, true, true)
+        .build(1);
+
+    defer vm.deinit();
+
+    try vm.run();
+    try std.testing.expectEqual(true, vm.currentFrame().registers[0].bool);
+}
+
+test "EQ compares 2 floats" {
+    var bytecode = TestBytecodeBuilder.init(std.testing.allocator);
+    defer bytecode.deinit();
+    var vm = try bytecode
+        .addConst(.{ .float = 2.23 })
+        .addConst(.{ .float = 2.23 })
+        .eq(0, 0, 0, true, true)
+        .build(1);
+
+    defer vm.deinit();
+
+    try vm.run();
+    try std.testing.expectEqual(true, vm.currentFrame().registers[0].bool);
+}
+
+test "EQ compares float with int" {
+    var bytecode = TestBytecodeBuilder.init(std.testing.allocator);
+    defer bytecode.deinit();
+    var vm = try bytecode
+        .addConst(.{ .float = 115 })
+        .addConst(.{ .integer = 115 })
+        .eq(0, 0, 0, true, true)
+        .build(1);
+
+    defer vm.deinit();
+
+    try vm.run();
+    try std.testing.expectEqual(true, vm.currentFrame().registers[0].bool);
+}
+
+test "EQ compares 2 nils" {
+    var bytecode = TestBytecodeBuilder.init(std.testing.allocator);
+    defer bytecode.deinit();
+
+    var vm = try bytecode
+        .addConst(.{ .nil = {} })
+        .eq(0, 0, 0, true, true)
+        .build(1);
+
+    defer vm.deinit();
+
+    try vm.run();
+    try std.testing.expectEqual(true, vm.currentFrame().registers[0].bool);
+}
+
+test "EQ compares 2 different types" {
+    var bytecode = TestBytecodeBuilder.init(std.testing.allocator);
+    defer bytecode.deinit();
+
+    var vm = try bytecode
+        .addConst(.{ .nil = {} })
+        .addConst(.{ .float = 2.32 })
+        .addConst(.{ .integer = 3 })
+        .addConst(.{ .bool = true })
+        .eq(0, 0, 1, true, true)
+        .eq(1, 0, 2, true, true)
+        .eq(2, 0, 3, true, true)
+        .eq(3, 1, 2, true, true)
+        .eq(4, 1, 3, true, true)
+        .eq(5, 2, 3, true, true)
+        .build(6);
+
+    defer vm.deinit();
+
+    try vm.run();
+    try std.testing.expectEqual(false, vm.currentFrame().registers[0].bool);
+    try std.testing.expectEqual(false, vm.currentFrame().registers[1].bool);
+    try std.testing.expectEqual(false, vm.currentFrame().registers[2].bool);
+    try std.testing.expectEqual(false, vm.currentFrame().registers[3].bool);
+    try std.testing.expectEqual(false, vm.currentFrame().registers[4].bool);
+    try std.testing.expectEqual(false, vm.currentFrame().registers[5].bool);
+}
+
+test "LT checks if number is less then other number" {
+    var bytecode = TestBytecodeBuilder.init(std.testing.allocator);
+    defer bytecode.deinit();
+
+    var vm = try bytecode
+        .addConst(.{ .integer = 2 })
+        .addConst(.{ .float = 2.32 })
+        .addConst(.{ .float = 3 })
+        .addConst(.{ .integer = 3 })
+        .lt(0, 0, 1, true, true)
+        .lt(1, 0, 2, true, true)
+        .lt(2, 2, 3, true, true)
+        .lt(3, 2, 1, true, true)
+        .build(4);
+
+    defer vm.deinit();
+    try vm.run();
+    try std.testing.expectEqual(true, vm.currentFrame().registers[0].bool);
+    try std.testing.expectEqual(true, vm.currentFrame().registers[1].bool);
+    try std.testing.expectEqual(false, vm.currentFrame().registers[2].bool);
+    try std.testing.expectEqual(false, vm.currentFrame().registers[3].bool);
+}
+
+test "LE checks if number is less or equal then other number" {
+    var bytecode = TestBytecodeBuilder.init(std.testing.allocator);
+    defer bytecode.deinit();
+
+    var vm = try bytecode
+        .addConst(.{ .integer = 2 })
+        .addConst(.{ .float = 2.32 })
+        .addConst(.{ .float = 3 })
+        .addConst(.{ .integer = 3 })
+        .le(0, 0, 1, true, true)
+        .le(1, 0, 2, true, true)
+        .le(2, 2, 3, true, true)
+        .le(3, 2, 1, true, true)
+        .build(4);
+
+    defer vm.deinit();
+    try vm.run();
+    try std.testing.expectEqual(true, vm.currentFrame().registers[0].bool);
+    try std.testing.expectEqual(true, vm.currentFrame().registers[1].bool);
+    try std.testing.expectEqual(true, vm.currentFrame().registers[2].bool);
+    try std.testing.expectEqual(false, vm.currentFrame().registers[3].bool);
+}
+
+test "TEST checks if item is true and skips next instruction" {
+    var bytecode = TestBytecodeBuilder.init(std.testing.allocator);
+    defer bytecode.deinit();
+
+    // simple If else case. We put the lower number to the register
+    var vm = try bytecode
+        .addConst(.{ .integer = 2 })
+        .addConst(.{ .float = 2.32 })
+        .le(0, 0, 1, true, true)
+        .testt(0) // if r0 == true then go to .loadk(0, 0)
+        .jmp(3) // if false ski the .loadk(0, 0)
+        .loadk(0, 0)
+        .jmp(2)
+        .loadk(0, 1)
+        .build(4);
+
+    defer vm.deinit();
+
+    try vm.run();
+    try std.testing.expectEqual(2, vm.currentFrame().registers[0].integer);
+}
+
+test "ISNIL checks if item is nil" {
+    var bytecode = TestBytecodeBuilder.init(std.testing.allocator);
+    defer bytecode.deinit();
+
+    // simple If else case. We put the lower number to the register
+    var vm = try bytecode
+        .addConst(.{ .integer = 2 })
+        .addConst(.{ .nil = {} })
+        .loadk(0, 0)
+        .loadk(1, 1)
+        .isnil(0, 0)
+        .isnil(1, 1)
+        .build(2);
+
+    defer vm.deinit();
+
+    try vm.run();
+    try std.testing.expectEqual(false, vm.currentFrame().registers[0].bool);
+    try std.testing.expectEqual(true, vm.currentFrame().registers[1].bool);
+}
+
+// @TODO more tests
 // A little helper to build bytecode
 // Look at the vm tests to see the usage
 pub const TestBytecodeBuilder = struct {
@@ -653,6 +949,36 @@ pub const TestBytecodeBuilder = struct {
 
     pub fn unm(self: *TestBytecodeBuilder, to: u8, from: u8) *TestBytecodeBuilder {
         self.appendInstr(.{ .abc = .{ .tag = opcodes.OpCode.UNM.toU6(), .a = to, .b = from, .c = 0, .bk = false, .ck = false } });
+        return self;
+    }
+
+    pub fn not(self: *TestBytecodeBuilder, to: u8, from: u8) *TestBytecodeBuilder {
+        self.appendInstr(.{ .abc = .{ .tag = opcodes.OpCode.NOT.toU6(), .a = to, .b = from, .c = 0, .bk = false, .ck = false } });
+        return self;
+    }
+
+    pub fn eq(self: *TestBytecodeBuilder, a: u8, b: u8, c: u8, bk: bool, ck: bool) *TestBytecodeBuilder {
+        self.appendInstr(.{ .abc = .{ .tag = opcodes.OpCode.EQ.toU6(), .a = a, .b = b, .c = c, .bk = bk, .ck = ck } });
+        return self;
+    }
+
+    pub fn lt(self: *TestBytecodeBuilder, a: u8, b: u8, c: u8, bk: bool, ck: bool) *TestBytecodeBuilder {
+        self.appendInstr(.{ .abc = .{ .tag = opcodes.OpCode.LT.toU6(), .a = a, .b = b, .c = c, .bk = bk, .ck = ck } });
+        return self;
+    }
+
+    pub fn le(self: *TestBytecodeBuilder, a: u8, b: u8, c: u8, bk: bool, ck: bool) *TestBytecodeBuilder {
+        self.appendInstr(.{ .abc = .{ .tag = opcodes.OpCode.LE.toU6(), .a = a, .b = b, .c = c, .bk = bk, .ck = ck } });
+        return self;
+    }
+
+    pub fn testt(self: *TestBytecodeBuilder, a: u8) *TestBytecodeBuilder {
+        self.appendInstr(.{ .abc = .{ .tag = opcodes.OpCode.TEST.toU6(), .a = a, .b = 0, .c = 0, .bk = false, .ck = false } });
+        return self;
+    }
+
+    pub fn isnil(self: *TestBytecodeBuilder, a: u8, b: u8) *TestBytecodeBuilder {
+        self.appendInstr(.{ .abc = .{ .tag = opcodes.OpCode.ISNIL.toU6(), .a = a, .b = b, .c = 0, .bk = false, .ck = false } });
         return self;
     }
 

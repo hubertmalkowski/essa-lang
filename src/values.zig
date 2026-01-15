@@ -27,6 +27,18 @@ pub const Value = union(enum) {
     pub fn isNumeric(self: *const Value) bool {
         return self.isInt() or self.isFloat();
     }
+
+    pub fn isBool(self: *const Value) bool {
+        return self.* == .bool;
+    }
+
+    pub fn isTuple(self: *const Value) bool {
+        return self.* == .tuple;
+    }
+
+    pub fn isNil(self: *const Value) bool {
+        return self.* == .nil;
+    }
 };
 
 // GC Header
