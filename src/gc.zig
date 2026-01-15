@@ -13,16 +13,13 @@ const GC = struct {
     allocated_bytes: usize = 0,
     threshold: usize = 1024 * 512,
 
-    pub fn init(allocator: std.mem.Allocator) GC {
-        var self = GC{
-            .arenaA = std.heap.ArenaAllocator.init(allocator),
-            .arenaB = std.heap.ArenaAllocator.init(allocator),
-            .from_space = undefined,
-            .to_space = undefined,
-        };
+    pub fn init(self: *GC, allocator: std.mem.Allocator) void {
+        self.arenaA = std.heap.ArenaAllocator.init(allocator);
+        self.arenaB = std.heap.ArenaAllocator.init(allocator);
         self.from_space = &self.arenaA;
         self.to_space = &self.arenaB;
-        return self;
+        self.allocated_bytes = 0;
+        self.threshold = 1024 * 512;
     }
 
     pub fn deinit(self: *GC) void {
@@ -109,18 +106,19 @@ const GC = struct {
 };
 
 test "GC Works" {
-    var gc = GC.init(std.testing.allocator);
-    defer gc.deinit();
     var allocator = std.testing.allocator;
-    const deadObjects = 1;
-    const aliveObjects = 1;
+    const deadObjects = 255;
+    const aliveObjects = 255;
 
     const proto = try allocator.create(value.ClosureProto);
+
+    defer std.testing.allocator.destroy(proto);
     const upvalues = [_]value.ClosureUpvalueDescription{};
     const constants = [_]value.Value{};
     const instructions = [_]opcodes.Instruction{};
     proto.* = .{ .instructions = &instructions, .constants = &constants, .upvalue_info = &upvalues, .arity = 0, .registers = @max(deadObjects, aliveObjects) };
     const closure = try std.testing.allocator.create(value.Closure);
+    defer std.testing.allocator.destroy(closure);
     closure.* = .{
         .object = .{ .forwarded = null },
         .proto = proto,
@@ -131,21 +129,27 @@ test "GC Works" {
     defer frame.deinit(allocator);
     const frames = [_]vm.CallFrame{frame};
 
-    for (0..deadObjects) |idx| {
-        const obj = try gc.allocate(&frames, value.Tuple);
+    var gc: GC = undefined;
+    gc.init(std.testing.allocator);
+    defer gc.deinit();
 
-        obj.tag = 0;
+    for (0..1000) |_| {
+        for (0..deadObjects) |idx| {
+            const obj = try gc.allocate(&frames, value.Tuple);
 
-        var values = std.ArrayList(value.Value).empty;
-        if (idx > 0) {
-            try values.append(std.testing.allocator, frame.getReg(idx - 1));
-        } else {
-            try values.append(std.testing.allocator, value.Value{ .integer = 10123 });
+            obj.tag = 0;
+
+            var values = std.ArrayList(value.Value).empty;
+            if (idx > 0) {
+                try values.append(gc.from_space.allocator(), frame.getReg(idx - 1));
+            } else {
+                try values.append(gc.from_space.allocator(), value.Value{ .integer = 10123 });
+            }
+
+            obj.*.values = try values.toOwnedSlice(gc.from_space.allocator());
+
+            frame.setReg(idx, value.Value{ .tuple = obj });
         }
-
-        obj.*.values = try values.toOwnedSlice(std.testing.allocator);
-
-        frame.setReg(idx, value.Value{ .tuple = obj });
     }
 
     for (0..aliveObjects) |idx| {
@@ -155,12 +159,12 @@ test "GC Works" {
 
         var values = std.ArrayList(value.Value).empty;
         if (idx > 0) {
-            try values.append(std.testing.allocator, frame.getReg(idx - 1));
+            try values.append(gc.from_space.allocator(), frame.getReg(idx - 1));
         } else {
-            try values.append(std.testing.allocator, value.Value{ .integer = 10123 });
+            try values.append(gc.from_space.allocator(), value.Value{ .integer = 10123 });
         }
 
-        obj.*.values = try values.toOwnedSlice(std.testing.allocator);
+        obj.*.values = try values.toOwnedSlice(gc.from_space.allocator());
 
         frame.setReg(idx, value.Value{ .tuple = obj });
     }
