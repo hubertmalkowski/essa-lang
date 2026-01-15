@@ -11,7 +11,7 @@ const GC = struct {
     to_space: *std.heap.ArenaAllocator,
 
     allocated_bytes: usize = 0,
-    threshold: usize = 1024 * 512,
+    threshold: usize = 1024 * 1024 * 512,
 
     pub fn init(self: *GC, allocator: std.mem.Allocator) void {
         self.arenaA = std.heap.ArenaAllocator.init(allocator);
@@ -47,7 +47,8 @@ const GC = struct {
     }
 
     pub fn collect(self: *GC, frames: []const vm.CallFrame) !void {
-        std.debug.print("Collectiong on: {d} bytes\n", .{self.allocated_bytes});
+        const start = std.time.microTimestamp();
+        const old = self.allocated_bytes;
         self.allocated_bytes = 0;
         for (frames) |*frame| {
             for (frame.registers) |*reg| {
@@ -60,10 +61,16 @@ const GC = struct {
         self.from_space = self.to_space;
         self.to_space = temp;
 
-        std.debug.print("{d} bytes stayed alive\n", .{self.allocated_bytes});
-
         _ = self.to_space.reset(.retain_capacity);
         self.threshold = self.threshold * 2;
+
+        const end = std.time.microTimestamp();
+
+        const time = @as(f64, @floatFromInt(end - start)) / 1000.0;
+        const evac: f64 = @as(f64, @floatFromInt(self.allocated_bytes)) / (1024 * 1024);
+        const deleted: f64 = @as(f64, @floatFromInt(old)) / (1024 * 1024);
+
+        std.debug.print("Collection done, {d:.2} MiB evacuated, {d:.2} MiB removed in {d:.2} ms\n", .{ evac, deleted, time });
     }
 
     pub fn evacuateVal(self: *GC, val: value.Value) !value.Value {
@@ -136,7 +143,7 @@ test "GC Works" {
     gc.init(std.testing.allocator);
     defer gc.deinit();
 
-    for (0..1000) |_| {
+    for (0..100000) |_| {
         for (0..deadObjects) |idx| {
             const obj = try gc.allocate(&frames, value.Tuple);
 
