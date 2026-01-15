@@ -43,7 +43,7 @@ pub const Value = union(enum) {
 
 // GC Header
 // @TODO
-pub const Object = struct { next: ?*Object };
+pub const Object = struct { forwarded: ?*Object = null };
 
 pub const ClosureUpvalueDescription = struct { parent_upvalue: bool, index: u8 };
 pub const ClosureProto = struct {

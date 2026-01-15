@@ -8,22 +8,22 @@ pub const CallFrame = struct {
     pc: usize,
     return_dest: u8,
 
-    fn init(allocator: std.mem.Allocator, closure: *values.Closure, dest: u8) !CallFrame {
+    pub fn init(allocator: std.mem.Allocator, closure: *values.Closure, dest: u8) !CallFrame {
         const regs = try allocator.alloc(values.Value, closure.proto.registers);
         @memset(regs, values.Value.nil);
 
         return .{ .registers = regs, .pc = 0, .return_dest = dest, .closure = closure };
     }
 
-    fn deinit(self: *CallFrame, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *CallFrame, allocator: std.mem.Allocator) void {
         allocator.free(self.registers);
     }
 
-    fn getReg(self: *CallFrame, index: usize) values.Value {
+    pub fn getReg(self: *CallFrame, index: usize) values.Value {
         return self.registers[index];
     }
 
-    fn setReg(self: *CallFrame, index: usize, val: values.Value) void {
+    pub fn setReg(self: *CallFrame, index: usize, val: values.Value) void {
         self.registers[index] = val;
     }
 
@@ -58,7 +58,7 @@ pub const VM = struct {
     pub fn init(allocator: std.mem.Allocator, moduleProto: *const values.ClosureProto) !VM {
         const closure = try std.testing.allocator.create(values.Closure);
         closure.* = .{
-            .object = .{ .next = null },
+            .object = .{ .forwarded = null },
             .proto = moduleProto,
             .upvalues = &[_]values.Value{},
         };
