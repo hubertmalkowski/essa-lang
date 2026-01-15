@@ -47,6 +47,7 @@ const GC = struct {
     }
 
     pub fn collect(self: *GC, frames: []const vm.CallFrame) !void {
+        std.debug.print("Collectiong on: {d} bytes\n", .{self.allocated_bytes});
         self.allocated_bytes = 0;
         for (frames) |*frame| {
             for (frame.registers) |*reg| {
@@ -58,6 +59,8 @@ const GC = struct {
         const temp = self.from_space;
         self.from_space = self.to_space;
         self.to_space = temp;
+
+        std.debug.print("{d} bytes stayed alive\n", .{self.allocated_bytes});
 
         _ = self.to_space.reset(.retain_capacity);
         self.threshold = self.threshold * 2;
