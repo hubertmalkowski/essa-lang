@@ -54,7 +54,6 @@ ISNIL A B            ; r(A) := r(B) == nil
 
 ; Functions
 CLOSURE A Bx         ; r(A) := kproto(Bx)
-CAPTURE A B C        ; r(A).upvalues[B] := r(C)
 UPVALUE A Bx         ; r(A) := upvalues(Bx)
 RETURN A             ; return r(A)
 CALL A B             ; r(A) := r(A)(r(A + 1) ... r(A + B - 1))
