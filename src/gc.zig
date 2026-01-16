@@ -4,8 +4,14 @@ const value = @import("values.zig");
 const opcodes = @import("opcodes.zig");
 
 const GC = struct {
+    buffer: []u8,
+    fbaA: std.heap.FixedBufferAllocator,
+    fbaB: std.heap.FixedBufferAllocator,
+
     arenaA: std.heap.ArenaAllocator,
     arenaB: std.heap.ArenaAllocator,
+
+    parentAlloc: std.mem.Allocator,
 
     from_space: *std.heap.ArenaAllocator,
     to_space: *std.heap.ArenaAllocator,
@@ -13,9 +19,15 @@ const GC = struct {
     allocated_bytes: usize = 0,
     threshold: usize = 1024 * 1024 * 512,
 
-    pub fn init(self: *GC, allocator: std.mem.Allocator) void {
-        self.arenaA = std.heap.ArenaAllocator.init(allocator);
-        self.arenaB = std.heap.ArenaAllocator.init(allocator);
+    pub fn init(self: *GC, allocator: std.mem.Allocator) !void {
+        const total_size = 1024 * 1024 * 1024;
+        const buffer = try allocator.alloc(u8, total_size);
+        const half = total_size / 2;
+        self.fbaA = std.heap.FixedBufferAllocator.init(buffer[0..half]);
+        self.fbaB = std.heap.FixedBufferAllocator.init(buffer[half..]);
+        self.arenaA = std.heap.ArenaAllocator.init(self.fbaA.allocator());
+        self.arenaB = std.heap.ArenaAllocator.init(self.fbaB.allocator());
+        self.parentAlloc = allocator;
         self.from_space = &self.arenaA;
         self.to_space = &self.arenaB;
         self.allocated_bytes = 0;
@@ -25,6 +37,7 @@ const GC = struct {
     pub fn deinit(self: *GC) void {
         self.arenaA.deinit();
         self.arenaB.deinit();
+        self.parentAlloc.free(self.buffer);
     }
 
     pub fn initDefault() GC {
@@ -140,7 +153,7 @@ test "GC Works" {
     const frames = [_]vm.CallFrame{frame};
 
     var gc: GC = undefined;
-    gc.init(std.testing.allocator);
+    try gc.init(std.testing.allocator);
     defer gc.deinit();
 
     for (0..100000) |_| {
