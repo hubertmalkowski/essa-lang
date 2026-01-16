@@ -16,13 +16,14 @@ const GC = struct {
     from_space: *std.heap.ArenaAllocator,
     to_space: *std.heap.ArenaAllocator,
 
-    allocated_bytes: usize = 0,
-    threshold: usize = 1024 * 1024 * 512,
+    allocated_bytes: usize,
+    threshold: usize,
 
     pub fn init(self: *GC, allocator: std.mem.Allocator) !void {
         const total_size = 1024 * 1024 * 1024;
         const buffer = try allocator.alloc(u8, total_size);
         const half = total_size / 2;
+        self.buffer = buffer;
         self.fbaA = std.heap.FixedBufferAllocator.init(buffer[0..half]);
         self.fbaB = std.heap.FixedBufferAllocator.init(buffer[half..]);
         self.arenaA = std.heap.ArenaAllocator.init(self.fbaA.allocator());
@@ -31,12 +32,14 @@ const GC = struct {
         self.from_space = &self.arenaA;
         self.to_space = &self.arenaB;
         self.allocated_bytes = 0;
-        self.threshold = 1024 * 512;
+        self.threshold = 1024 * 1024 * 256;
     }
 
     pub fn deinit(self: *GC) void {
         self.arenaA.deinit();
         self.arenaB.deinit();
+        self.fbaA.reset();
+        self.fbaB.reset();
         self.parentAlloc.free(self.buffer);
     }
 
@@ -59,6 +62,18 @@ const GC = struct {
         return ptr;
     }
 
+    pub fn allocateSlice(self: *GC, frames: []const vm.CallFrame, len: usize) ![]value.Value {
+        const size = @sizeOf(value.Value) * len;
+
+        if (self.allocated_bytes + size > self.threshold) {
+            try self.collect(frames);
+        }
+
+        const ptr = try self.from_space.allocator().alloc(value.Value, len);
+        self.allocated_bytes += size;
+        return ptr;
+    }
+
     pub fn collect(self: *GC, frames: []const vm.CallFrame) !void {
         const start = std.time.microTimestamp();
         const old = self.allocated_bytes;
@@ -75,7 +90,6 @@ const GC = struct {
         self.to_space = temp;
 
         _ = self.to_space.reset(.retain_capacity);
-        self.threshold = self.threshold * 2;
 
         const end = std.time.microTimestamp();
 
@@ -119,7 +133,11 @@ const GC = struct {
                 tuple.*.object.forwarded = &copied.object;
                 copied.* = tuple.*;
                 copied.*.object.forwarded = null;
-                self.allocated_bytes += @sizeOf(value.Tuple);
+
+                const copiedFields = try self.to_space.allocator().alloc(value.Value, tuple.values.len);
+                @memcpy(copiedFields, copied.values);
+                copied.*.values = copiedFields;
+                self.allocated_bytes += @sizeOf(value.Tuple) + @sizeOf(value.Value) * copiedFields.len;
                 return value.Value{ .tuple = copied };
             },
 
@@ -162,14 +180,14 @@ test "GC Works" {
 
             obj.tag = 0;
 
-            var values = std.ArrayList(value.Value).empty;
+            var values = try gc.allocateSlice(&frames, 1);
             if (idx > 0) {
-                try values.append(gc.from_space.allocator(), frame.getReg(idx - 1));
+                values[0] = frame.getReg(idx - 1);
             } else {
-                try values.append(gc.from_space.allocator(), value.Value{ .integer = 10123 });
+                values[0] = value.Value{ .integer = 11231231 };
             }
 
-            obj.*.values = try values.toOwnedSlice(gc.from_space.allocator());
+            obj.*.values = values;
 
             frame.setReg(idx, value.Value{ .tuple = obj });
         }
@@ -180,14 +198,14 @@ test "GC Works" {
 
         obj.tag = 0;
 
-        var values = std.ArrayList(value.Value).empty;
+        var values = try gc.allocateSlice(&frames, 1);
         if (idx > 0) {
-            try values.append(gc.from_space.allocator(), frame.getReg(idx - 1));
+            values[0] = frame.getReg(idx - 1);
         } else {
-            try values.append(gc.from_space.allocator(), value.Value{ .integer = 10123 });
+            values[0] = value.Value{ .integer = 11231231 };
         }
 
-        obj.*.values = try values.toOwnedSlice(gc.from_space.allocator());
+        obj.*.values = values;
 
         frame.setReg(idx, value.Value{ .tuple = obj });
     }

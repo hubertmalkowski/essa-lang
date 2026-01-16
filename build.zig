@@ -70,6 +70,7 @@ pub fn build(b: *std.Build) void {
             // definition if desireable (e.g. firmware for embedded devices).
             .target = target,
             .optimize = optimize,
+
             // List of modules available for import in source files part of the
             // root module.
             .imports = &.{
@@ -118,9 +119,7 @@ pub fn build(b: *std.Build) void {
     // Creates an executable that will run `test` blocks from the provided module.
     // Here `mod` needs to define a target, which is why earlier we made sure to
     // set the releative field.
-    const mod_tests = b.addTest(.{
-        .root_module = mod,
-    });
+    const mod_tests = b.addTest(.{ .root_module = mod, .use_llvm = true });
 
     // A run step that will run the test executable.
     const run_mod_tests = b.addRunArtifact(mod_tests);
@@ -141,6 +140,10 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
+
+    const build_test_step = b.step("testbuild", "Build tests");
+    const mod_test_exe = b.addInstallArtifact(mod_tests, .{});
+    build_test_step.dependOn(&mod_test_exe.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //

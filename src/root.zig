@@ -1,6 +1,12 @@
 //! By convention, root.zig is the root source file when making a library.
 const std = @import("std");
 
+pub const gc = @import("gc.zig");
+
+test {
+    _ = gc;
+}
+
 pub fn bufferedPrint() !void {
     // Stdout is for the actual output of your application, for example if you
     // are implementing gzip, then only the compressed bytes should be sent to
