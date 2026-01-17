@@ -19,7 +19,8 @@ const GC = struct {
     allocated_bytes: usize,
     threshold: usize,
 
-    pub fn init(self: *GC, allocator: std.mem.Allocator) !void {
+    // This is ugly
+    fn make(self: *GC, allocator: std.mem.Allocator) !void {
         const total_size = 1024 * 1024 * 1024;
         const buffer = try allocator.alloc(u8, total_size);
         const half = total_size / 2;
@@ -44,7 +45,7 @@ const GC = struct {
     }
 
     pub fn initDefault() GC {
-        return init(std.heap.page_allocator);
+        return make(std.heap.page_allocator);
     }
 
     pub fn allocate(self: *GC, frames: []const vm.CallFrame, comptime T: type) !*T {
@@ -59,6 +60,26 @@ const GC = struct {
         const object_ptr = &ptr.object; // Get pointer to embedded Object
         object_ptr.*.forwarded = null;
         self.allocated_bytes += size;
+        return ptr;
+    }
+
+    pub fn allocateTuple(self: *GC, frames: []const vm.CallFrame, len: usize) !*value.Tuple {
+        const size = @sizeOf(value.Value) * len + @sizeOf(value.Tuple);
+
+        if (self.allocated_bytes + size > self.threshold) {
+            try self.collect(frames);
+        }
+
+        const mem = try self.from_space.allocator().alloc(u8, size);
+        self.allocated_bytes += size;
+
+        const ptr: *value.Tuple = @ptrCast(@alignCast(mem.ptr));
+        ptr.* = undefined;
+
+        ptr.object.forwarded = null;
+        const slice_ptr: [*]value.Value = @ptrCast(@alignCast(@as([*]u8, @ptrCast(ptr)) + @sizeOf(value.Tuple)));
+        ptr.values = slice_ptr[0..len];
+
         return ptr;
     }
 
@@ -129,15 +150,24 @@ const GC = struct {
                     tvalue.* = newval;
                 }
 
-                const copied = try self.to_space.allocator().create(value.Tuple);
-                tuple.*.object.forwarded = &copied.object;
-                copied.* = tuple.*;
-                copied.*.object.forwarded = null;
+                const len = tuple.values.len;
+                const total_size = @sizeOf(value.Tuple) + (@sizeOf(value.Value) * len);
 
-                const copiedFields = try self.to_space.allocator().alloc(value.Value, tuple.values.len);
-                @memcpy(copiedFields, copied.values);
-                copied.*.values = copiedFields;
-                self.allocated_bytes += @sizeOf(value.Tuple) + @sizeOf(value.Value) * copiedFields.len;
+                const mem = try self.to_space.allocator().alloc(u8, total_size);
+                self.allocated_bytes += total_size;
+                const copied: *value.Tuple = @ptrCast(@alignCast(mem.ptr));
+
+                tuple.object.forwarded = &copied.object;
+
+                copied.* = tuple.*;
+                copied.object.forwarded = null;
+
+                const new_slice_ptr: [*]value.Value = @ptrCast(@alignCast(@as([*]u8, @ptrCast(copied)) + @sizeOf(value.Tuple)));
+
+                @memcpy(new_slice_ptr[0..len], tuple.values);
+
+                copied.values = new_slice_ptr[0..len];
+
                 return value.Value{ .tuple = copied };
             },
 
@@ -171,41 +201,39 @@ test "GC Works" {
     const frames = [_]vm.CallFrame{frame};
 
     var gc: GC = undefined;
-    try gc.init(std.testing.allocator);
+    try gc.make(std.testing.allocator);
     defer gc.deinit();
 
     for (0..100000) |_| {
         for (0..deadObjects) |idx| {
-            const obj = try gc.allocate(&frames, value.Tuple);
+            const obj = try gc.allocateTuple(&frames, 256);
 
             obj.tag = 0;
 
-            var values = try gc.allocateSlice(&frames, 1);
-            if (idx > 0) {
-                values[0] = frame.getReg(idx - 1);
-            } else {
-                values[0] = value.Value{ .integer = 11231231 };
-            }
+            @memset(obj.values, value.Value{ .float = 123 });
 
-            obj.*.values = values;
+            if (idx > 0) {
+                obj.values[0] = frame.getReg(idx - 1);
+            } else {
+                obj.values[0] = value.Value{ .integer = 11231231 };
+            }
 
             frame.setReg(idx, value.Value{ .tuple = obj });
         }
     }
 
     for (0..aliveObjects) |idx| {
-        const obj = try gc.allocate(&frames, value.Tuple);
+        const obj = try gc.allocateTuple(&frames, 256);
 
         obj.tag = 0;
 
-        var values = try gc.allocateSlice(&frames, 1);
-        if (idx > 0) {
-            values[0] = frame.getReg(idx - 1);
-        } else {
-            values[0] = value.Value{ .integer = 11231231 };
-        }
+        @memset(obj.values, value.Value{ .float = 123 });
 
-        obj.*.values = values;
+        if (idx > 0) {
+            obj.values[0] = frame.getReg(idx - 1);
+        } else {
+            obj.values[0] = value.Value{ .integer = 11231231 };
+        }
 
         frame.setReg(idx, value.Value{ .tuple = obj });
     }
